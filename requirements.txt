@@ -1,0 +1,9 @@
+flask
+flask_sock
+flask_cors
+torch
+torchaudio
+numpy
+transformers
+soundfile
+librosa
