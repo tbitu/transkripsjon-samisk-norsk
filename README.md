@@ -32,7 +32,7 @@ Før du starter, sørg for at du har følgende installert:
    source .venv/bin/activate  \# På Windows: .venv\\Scripts\\activate
 
 3. **Installer nødvendige Python-biblioteker:**  
-   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu129
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu129  
    pip install \-r requirements.txt
 
 ## **Bruk**
