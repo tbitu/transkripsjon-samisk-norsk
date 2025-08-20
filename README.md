@@ -1,6 +1,6 @@
-# **Transkripsjon Samisk-Norsk**
+# **Transkripsjon samisk-norsk**
 
-Dette prosjektet er en sanntids simultanoversetter som transkriberer samisk tale til norsk tekst ved hjelp av Nasjonalbibliotekets nb-whisper-large-modell. Løsningen er bygget med en Python/Flask-tjener i bakkant og en enkel HTML/JavaScript-klient i front.
+Dette prosjektet er en sanntids simultanoversetter som transkriberer samisk og norsk tale til norsk tekst ved hjelp av Nasjonalbibliotekets nb-whisper-large-modell. Løsningen er bygget med en Python/Flask-tjener i bakkant og en enkel HTML/JavaScript-klient i front.
 
 ## **Funksjoner**
 
