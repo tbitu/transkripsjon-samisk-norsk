@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Samisk til norsk oversetter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .pulse { animation: pulse-red 2s infinite; }
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(220, 38, 38, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-2xl bg-white dark:bg-gray-800 rounded-2xl shadow-lg p-6 md:p-8">
+        <div class="text-center mb-6">
+            <h1 class="text-2xl md:text-3xl font-bold text-gray-800 dark:text-white">Samisk til norsk oversetter</h1>
+        </div>
+
+        <div class="flex flex-col items-center justify-center space-y-6">
+            <button id="recordButton" class="px-8 py-4 bg-blue-600 text-white font-semibold rounded-full shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all duration-300 ease-in-out text-lg">
+                Start opptak
+            </button>
+            <div id="status" class="h-6 text-center text-gray-600 dark:text-gray-300 font-medium">Klar til å starte</div>
+        </div>
+
+        <div id="transcriptionContainer" class="mt-8 bg-gray-50 dark:bg-gray-700 rounded-lg p-4 h-64 overflow-y-auto border border-gray-200 dark:border-gray-600">
+            <p id="transcription" class="whitespace-pre-wrap"></p>
+        </div>
+    </div>
+
+    <script>
+        const recordButton = document.getElementById('recordButton');
+        const statusDiv = document.getElementById('status');
+        const transcriptionDiv = document.getElementById('transcription');
+        const transcriptionContainer = document.getElementById('transcriptionContainer');
+
+        let isRecording = false;
+        let mediaRecorder;
+        let socket;
+        const CHUNK_TIMESLICE_MS = 500;
+
+        function startRecording() {
+            // Kobler seg automatisk til den samme adressen som nettsiden ble lastet fra.
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const serverUrl = `${protocol}//${window.location.host}/stream`;
+            
+            socket = new WebSocket(serverUrl);
+
+            socket.onopen = async () => {
+                console.log("WebSocket tilkobling åpnet.");
+                statusDiv.textContent = 'Tilkoblet. Starter mikrofon...';
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    isRecording = true;
+                    updateButtonUI(true);
+                    statusDiv.textContent = 'Strømmer lyd...';
+
+                    mediaRecorder = new MediaRecorder(stream);
+                    mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0 && socket.readyState === WebSocket.OPEN) {
+                            socket.send(event.data);
+                        }
+                    };
+                    mediaRecorder.start(CHUNK_TIMESLICE_MS);
+                } catch (err) {
+                    console.error("Feil ved mikrofon-tilgang:", err);
+                    statusDiv.textContent = 'Feil: Fikk ikke tilgang til mikrofon.';
+                    socket.close();
+                }
+            };
+
+            socket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.transcription) {
+                    transcriptionDiv.textContent += data.transcription + '\n';
+                    transcriptionContainer.scrollTop = transcriptionContainer.scrollHeight;
+                } else if (data.error) {
+                    console.error("Feil fra tjener:", data.error);
+                    statusDiv.textContent = `Feil: ${data.error}`;
+                }
+            };
+
+            socket.onclose = () => {
+                console.log("WebSocket tilkobling lukket.");
+                if (isRecording) {
+                    stopRecording(false);
+                }
+                statusDiv.textContent = 'Frakoblet. Klar til å starte.';
+            };
+
+            socket.onerror = (error) => {
+                console.error("WebSocket feil:", error);
+                statusDiv.textContent = 'Tilkoblingsfeil. Kjører tjeneren?';
+            };
+        }
+
+        function stopRecording(closeSocket = true) {
+            isRecording = false;
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stream.getTracks().forEach(track => track.stop());
+                mediaRecorder.stop();
+            }
+            if (socket && closeSocket && socket.readyState === WebSocket.OPEN) {
+                socket.close();
+            }
+            updateButtonUI(false);
+            statusDiv.textContent = 'Opptaket er stoppet.';
+        }
+        
+        function updateButtonUI(recording) {
+            if (recording) {
+                recordButton.textContent = 'Stopp opptak';
+                recordButton.classList.add('bg-red-600', 'hover:bg-red-700', 'pulse');
+                recordButton.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+            } else {
+                recordButton.textContent = 'Start opptak';
+                recordButton.classList.remove('bg-red-600', 'hover:bg-red-700', 'pulse');
+                recordButton.classList.add('bg-blue-600', 'hover:bg-blue-700');
+            }
+        }
+
+        recordButton.addEventListener('click', () => {
+            if (!isRecording) {
+                startRecording();
+            } else {
+                stopRecording();
+            }
+        });
+    </script>
+</body>
+</html>
