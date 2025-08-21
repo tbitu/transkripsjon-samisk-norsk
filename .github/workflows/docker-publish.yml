@@ -1,0 +1,34 @@
+# Navnet på GitHub Action-flyten
+name: Bygg og publiser Docker-image til GHCR
+
+# Denne Action-en kjører hver gang du pusher en endring til 'main'-branchen
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-push:
+    # Bruker en standard, fersk Ubuntu-maskin for å kjøre jobben
+    runs-on: ubuntu-latest
+
+    steps:
+      # Steg 1: Sjekker ut koden din fra repository-et
+      - name: Hent kode
+        uses: actions/checkout@v4
+
+      # Steg 2: Logger inn på GitHub Container Registry (GHCR)
+      # Den bruker en hemmelighet (secret) for å unngå å eksponere passordet ditt
+      - name: Logg inn på GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.CR_PAT }}
+
+      # Steg 3: Bygger Docker-imaget basert på din Dockerfile og pusher det til GHCR
+      - name: Bygg og push Docker-image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/transkripsjon-samisk-norsk:latest
