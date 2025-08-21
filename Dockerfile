@@ -1,25 +1,22 @@
-# Bruk et offisielt NVIDIA CUDA base-image for å få GPU-støtte
-FROM nvidia/cuda:12.9.1-devel-ubuntu22.04
+# Bruk et offisielt NVIDIA PyTorch-image som base.
+# Dette inkluderer Python, CUDA, cuDNN og en optimalisert PyTorch.
+FROM nvcr.io/nvidia/pytorch:25.08-py3
 
 # Sett miljøvariabler for å unngå interaktive dialoger under installasjon
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Europe/Oslo
 
-# Installer systemavhengigheter, inkludert Python, pip og ffmpeg
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
+# Installer kun ffmpeg, siden Python og pip allerede er inkludert
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Sett arbeidsmappen inne i containeren
 WORKDIR /app
 
-# Kopier requirements-filen og installer Python-avhengigheter
-# Dette steget caches av Docker for raskere bygging hvis kravene ikke endres
+# Kopier requirements-filen og installer de gjenværende Python-avhengighetene
 COPY requirements.txt .
-RUN pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu129
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Kopier resten av applikasjonsfilene (main.py, index.html)
 COPY . .
