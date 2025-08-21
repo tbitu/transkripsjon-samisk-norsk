@@ -14,6 +14,14 @@
             70% { box-shadow: 0 0 0 10px rgba(220, 38, 38, 0); }
             100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
         }
+        /* Styling for skyvebrytere */
+        input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; background: transparent; cursor: pointer; }
+        input[type=range]::-webkit-slider-runnable-track { background: #e5e7eb; height: 0.25rem; border-radius: 1rem; }
+        input[type=range]::-moz-range-track { background: #e5e7eb; height: 0.25rem; border-radius: 1rem; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; margin-top: -6px; background-color: #3b82f6; height: 1.25rem; width: 1.25rem; border-radius: 9999px; }
+        input[type=range]::-moz-range-thumb { border: none; border-radius: 9999px; background-color: #3b82f6; height: 1.25rem; width: 1.25rem; }
+        .dark input[type=range]::-webkit-slider-runnable-track { background: #4b5563; }
+        .dark input[type=range]::-moz-range-track { background: #4b5563; }
     </style>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 flex items-center justify-center min-h-screen p-4">
@@ -33,6 +41,37 @@
         <div id="transcriptionContainer" class="mt-8 bg-gray-50 dark:bg-gray-700 rounded-lg p-4 h-64 overflow-y-auto border border-gray-200 dark:border-gray-600">
             <p id="transcription" class="whitespace-pre-wrap"></p>
         </div>
+        
+        <!-- **NYTT: Innstillingspanel** -->
+        <div class="mt-6 border-t border-gray-200 dark:border-gray-700 pt-6">
+            <h2 class="text-lg font-semibold text-center mb-4">Innstillinger</h2>
+            <div class="space-y-4">
+                <!-- Maks klipplengde -->
+                <div>
+                    <label for="maxSeconds" class="flex justify-between text-sm font-medium text-gray-700 dark:text-gray-300">
+                        <span>Maks klipplengde</span>
+                        <span id="maxSecondsValue" class="font-bold">10 s</span>
+                    </label>
+                    <input id="maxSeconds" type="range" min="5" max="30" value="10" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                </div>
+                <!-- Stilletid -->
+                <div>
+                    <label for="silenceDuration" class="flex justify-between text-sm font-medium text-gray-700 dark:text-gray-300">
+                        <span>Stilletid før sending</span>
+                        <span id="silenceDurationValue" class="font-bold">1.5 s</span>
+                    </label>
+                    <input id="silenceDuration" type="range" min="0.5" max="5" value="1.5" step="0.1" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                </div>
+                <!-- Støyterskel -->
+                <div>
+                    <label for="noiseThreshold" class="flex justify-between text-sm font-medium text-gray-700 dark:text-gray-300">
+                        <span>Støyterskel (høyere = mindre følsom)</span>
+                        <span id="noiseThresholdValue" class="font-bold">0.04</span>
+                    </label>
+                    <input id="noiseThreshold" type="range" min="0.01" max="0.2" value="0.04" step="0.01" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer dark:bg-gray-700">
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -41,13 +80,48 @@
         const transcriptionDiv = document.getElementById('transcription');
         const transcriptionContainer = document.getElementById('transcriptionContainer');
 
+        // Innstillings-elementer
+        const maxSecondsSlider = document.getElementById('maxSeconds');
+        const silenceDurationSlider = document.getElementById('silenceDuration');
+        const noiseThresholdSlider = document.getElementById('noiseThreshold');
+        const maxSecondsValue = document.getElementById('maxSecondsValue');
+        const silenceDurationValue = document.getElementById('silenceDurationValue');
+        const noiseThresholdValue = document.getElementById('noiseThresholdValue');
+
         let isRecording = false;
         let mediaRecorder;
         let socket;
         const CHUNK_TIMESLICE_MS = 500;
 
+        // Funksjon for å sende konfigurasjon til tjeneren
+        function sendConfig(key, value) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                const configMessage = {
+                    type: 'config',
+                    key: key,
+                    value: parseFloat(value) // Sørg for at verdien er et tall
+                };
+                socket.send(JSON.stringify(configMessage));
+                console.log('Sendte config:', configMessage);
+            }
+        }
+        
+        // Event listeners for innstillinger
+        maxSecondsSlider.addEventListener('input', (e) => {
+            maxSecondsValue.textContent = `${e.target.value} s`;
+            sendConfig('MAX_BUFFER_SECONDS', e.target.value);
+        });
+        silenceDurationSlider.addEventListener('input', (e) => {
+            silenceDurationValue.textContent = `${parseFloat(e.target.value).toFixed(1)} s`;
+            sendConfig('SILENCE_DURATION_S', e.target.value);
+        });
+        noiseThresholdSlider.addEventListener('input', (e) => {
+            noiseThresholdValue.textContent = parseFloat(e.target.value).toFixed(2);
+            sendConfig('SILENCE_THRESHOLD', e.target.value);
+        });
+
+
         function startRecording() {
-            // Kobler seg automatisk til den samme adressen som nettsiden ble lastet fra.
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const serverUrl = `${protocol}//${window.location.host}/stream`;
             
@@ -57,6 +131,11 @@
                 console.log("WebSocket tilkobling åpnet.");
                 statusDiv.textContent = 'Tilkoblet. Starter mikrofon...';
                 try {
+                    // Send initiell konfigurasjon ved oppstart
+                    sendConfig('MAX_BUFFER_SECONDS', maxSecondsSlider.value);
+                    sendConfig('SILENCE_DURATION_S', silenceDurationSlider.value);
+                    sendConfig('SILENCE_THRESHOLD', noiseThresholdSlider.value);
+
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     isRecording = true;
                     updateButtonUI(true);
