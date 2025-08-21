@@ -33,7 +33,6 @@ whisper_executor = ThreadPoolExecutor(max_workers=1)
 # Funksjon for å servere HTML-klienten
 @app.route('/')
 def index():
-    # Sørg for at klient-filen heter 'index.html' og ligger i samme mappe
     return send_from_directory('.', 'index.html')
 
 # --- Last inn Whisper-modellen ---
