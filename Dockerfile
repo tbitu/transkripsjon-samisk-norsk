@@ -1,22 +1,28 @@
-# Bruk et offisielt NVIDIA PyTorch-image som base.
-# Dette inkluderer Python, CUDA, cuDNN og en optimalisert PyTorch.
-FROM nvcr.io/nvidia/pytorch:25.08-py3
+# Bruk et offisielt NVIDIA CUDA base-image. Dette er slankere og gir oss mer kontroll.
+FROM nvidia/cuda:12.9.1-cudnn-devel-ubuntu24.04
 
 # Sett miljøvariabler for å unngå interaktive dialoger under installasjon
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Europe/Oslo
 
-# Installer kun ffmpeg, siden Python og pip allerede er inkludert
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Installer systemavhengigheter, inkludert Python, pip og ffmpeg
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Sett arbeidsmappen inne i containeren
 WORKDIR /app
 
-# Kopier requirements-filen og installer de gjenværende Python-avhengighetene
+# Kopier requirements-filen først for å utnytte Docker-caching
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Installer PyTorch manuelt for å sikre kompatibilitet med CUDA-versjonen i base-imaget
+RUN pip3 install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu129
+
+# Installer resten av Python-avhengighetene fra requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Kopier resten av applikasjonsfilene (main.py, index.html)
 COPY . .
