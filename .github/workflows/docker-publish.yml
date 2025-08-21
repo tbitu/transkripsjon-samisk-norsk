@@ -16,6 +16,16 @@ jobs:
       - name: Hent kode
         uses: actions/checkout@v4
 
+      # NYTT STEG: Frigjør diskplass på den virtuelle maskinen
+      - name: Maksimer byggeplass
+        uses: easimon/maximize-build-space-action@v10
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+
       # Steg 2: Logger inn på GitHub Container Registry (GHCR)
       # Den bruker en hemmelighet (secret) for å unngå å eksponere passordet ditt
       - name: Logg inn på GHCR
