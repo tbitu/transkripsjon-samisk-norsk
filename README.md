@@ -1,6 +1,8 @@
-# **Transkripsjon samisk-norsk**
+# **Sanntids Transkripsjon og Oversettelse**
 
-Dette prosjektet er en sanntids simultanoversetter som transkriberer samisk og norsk tale til norsk tekst ved hjelp av Nasjonalbibliotekets nb-whisper-large-modell. Løsningen er bygget med en Python-backend og et webgrensesnitt.
+Dette prosjektet er en sanntids simultanoversetter som transkriberer samisk og norsk tale til norsk tekst, og deretter oversetter teksten til engelsk. Løsningen er bygget med en Python-backend og et webgrensesnitt, og bruker følgende modeller:
+- **Transkripsjon:** Nasjonalbibliotekets `nb-whisper-large`-modell.
+- **Oversettelse:** Metas `nllb-200-distilled-600M`-modell.
 
 ## **Bruk med Docker (anbefalt)**
 
@@ -60,7 +62,7 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
     - Ubuntu/Debian: `sudo apt install ffmpeg`
     - macOS: `brew install ffmpeg`
     - Windows: Last ned fra [ffmpeg.org](https://ffmpeg.org/download.html) og legg til i PATH
-3. **CUDA-kompatibel GPU (anbefalt):** For å bruke large-modellen trengs ca. 10-12 GB VRAM. Det går på CPU, men blir mye tregere.
+3. **CUDA-kompatibel GPU (anbefalt):** For å bruke large-modellene trengs ca. 10-12 GB VRAM. Det går på CPU, men blir mye tregere.
 
 **Steg:**
 
@@ -89,7 +91,7 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
    python main.py
    ```
 
-   Serveren starter og laster inn modellen. Dette kan ta litt tid. Når den er klar, lytter den på `http://0.0.0.0:5000`.
+   Serveren starter og laster inn modellene. Dette kan ta litt tid. Når den er klar, lytter den på `http://0.0.0.0:5000`.
 
 ---
 
@@ -100,19 +102,13 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
 
 **Bruk:**
 - Klikk på **"Start opptak"** og gi nettleseren tilgang til mikrofonen.
-- Snakk samisk eller norsk – teksten dukker opp etter pauser i talen.
+- Snakk samisk eller norsk. Transkribert norsk tekst dukker opp i venstre boks, og engelsk oversettelse følger kort tid etter i høyre boks.
+- Bruk knappene **"Norsk"**, **"Engelsk"** og **"Begge"** for å velge hvilke tekstbokser som skal vises.
 - Klikk på **"Stopp opptak"** for å avslutte.
-
----
-
-## **Oppsummering**
-
-- **Docker med GHCR** er enklest og tryggest for de fleste brukere.
-- **Manuell installasjon** anbefales kun for utviklere eller spesielle behov.
 
 ---
 
 ## **Feilsøking**
 
 - Får du feilmelding om manglende GPU/driver: Sjekk at NVIDIA-drivere og [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) er riktig installert.
-- CPU fallback er støttet, men ytelsen blir betydelig lavere med stor modell.
+- CPU fallback er støttet, men ytelsen blir betydelig lavere med store modeller.
