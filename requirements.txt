@@ -7,3 +7,4 @@ numpy
 transformers
 soundfile
 librosa
+silero-vad

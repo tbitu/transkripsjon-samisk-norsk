@@ -1,5 +1,5 @@
 # Før du kjører: installer/oppdater nødvendige biblioteker OG ffmpeg
-# pip install --upgrade Flask flask_cors transformers torch torchaudio soundfile flask-sock numpy librosa
+# pip install -r requirements.txt
 # System-krav: ffmpeg må være installert og tilgjengelig i PATH
 
 from flask import Flask, send_from_directory
@@ -15,16 +15,17 @@ import traceback
 import queue
 import threading
 import subprocess
+import time
 
 # --- Standard Konfigurasjon ---
-# Disse verdiene brukes som standard, men kan overstyres av klienten
 DEFAULT_CONFIG = {
     "MODEL_NAME": "NbAiLab/nb-whisper-large",
     "USE_FLOAT16": True,
     "MAX_BUFFER_SECONDS": 10,
     "TARGET_SAMPLERATE": 16000,
-    "SILENCE_THRESHOLD": 0.04,
-    "SILENCE_DURATION_S": 1.5,
+    # VAD-spesifikke innstillinger
+    "VAD_THRESHOLD": 0.5, # Følsomhet for VAD. Høyere = mindre følsom.
+    "SILENCE_DURATION_S": 1.0, # Hvor lenge det må være stille etter tale før sending.
 }
 
 # --- Oppsett av Flask-applikasjon ---
@@ -38,7 +39,7 @@ whisper_executor = ThreadPoolExecutor(max_workers=1)
 def index():
     return send_from_directory('.', 'index.html')
 
-# --- Last inn Whisper-modellen ---
+# --- Last inn modeller ---
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 if DEFAULT_CONFIG["USE_FLOAT16"] and torch.cuda.is_available():
     torch_dtype = torch.float16
@@ -50,24 +51,23 @@ else:
 print(f"Bruker enhet: {device} med dtype: {torch_dtype}")
 processor = None
 model = None
+vad_model = None
 try:
     print(f"Laster inn modell: {DEFAULT_CONFIG['MODEL_NAME']}...")
     processor = WhisperProcessor.from_pretrained(DEFAULT_CONFIG['MODEL_NAME'])
     model = WhisperForConditionalGeneration.from_pretrained(DEFAULT_CONFIG['MODEL_NAME'], torch_dtype=torch_dtype).to(device)
     print("Modell og prosessor ble lastet inn vellykket!")
+    
+    # **NYTT: Initialiser Silero VAD-modellen**
+    print("Laster inn VAD-modell...")
+    vad_model, _ = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', force_reload=False, onnx=False)
+    print("VAD-modell lastet inn vellykket!")
+
 except Exception as e:
-    print(f"ADVARSEL: Kunne ikke laste modellen: {e}")
+    print(f"ADVARSEL: Kunne ikke laste modeller: {e}")
     traceback.print_exc()
 
 # --- Hjelpefunksjoner ---
-def is_silent(audio_data, samplerate, config):
-    samples_to_check = int(min(samplerate * config["SILENCE_DURATION_S"], len(audio_data)))
-    if samples_to_check < 1024: return False
-    segment = audio_data[-samples_to_check:]
-    rms = np.sqrt(np.mean(segment**2))
-    print(f"Sjekker stillhet... RMS: {rms:.4f} (Terskel: {config['SILENCE_THRESHOLD']})")
-    return rms < config["SILENCE_THRESHOLD"]
-
 def process_audio_task(audio_input, ws, config):
     if not model or not processor:
         ws.send(json.dumps({"error": "Modellen er ikke tilgjengelig"}))
@@ -104,58 +104,65 @@ def process_audio_task(audio_input, ws, config):
 # --- Arbeider-tråder ---
 def ffmpeg_reader_thread(ffmpeg_proc, pcm_queue):
     while True:
-        chunk = ffmpeg_proc.stdout.read(int(DEFAULT_CONFIG['TARGET_SAMPLERATE'] * 2 * 0.5))
+        # Les små biter for rask VAD-respons (32ms)
+        chunk = ffmpeg_proc.stdout.read(512 * 2) 
         if not chunk:
             break
         pcm_queue.put(chunk)
     pcm_queue.put(None)
 
 def pcm_processor_worker(pcm_queue, ws, config, config_lock):
-    pcm_buffer = bytearray()
+    """**Omskrevet pcm_processor_worker med VAD**"""
+    speech_buffer = bytearray()
+    triggered = False
+    last_speech_time = 0
     
+    print("VAD-prosessor startet.")
     while True:
         chunk = pcm_queue.get()
         if chunk is None:
-            if pcm_buffer:
+            if speech_buffer:
                 with config_lock:
                     current_config = config.copy()
-                audio_input = np.frombuffer(pcm_buffer, dtype=np.int16).astype(np.float32) / 32768.0
+                audio_input = np.frombuffer(speech_buffer, dtype=np.int16).astype(np.float32) / 32768.0
                 whisper_executor.submit(process_audio_task, audio_input, ws, current_config)
             break
         
-        pcm_buffer.extend(chunk)
-        
         with config_lock:
             current_config = config.copy()
-        
-        target_bytes = current_config['TARGET_SAMPLERATE'] * 2 * current_config['MAX_BUFFER_SECONDS']
-        should_process = False
-        
-        audio_for_analysis = np.frombuffer(pcm_buffer, dtype=np.int16).astype(np.float32) / 32768.0
-        
-        if len(pcm_buffer) >= target_bytes:
-            print(f"Trigger: Maks varighet ({len(audio_for_analysis)/current_config['TARGET_SAMPLERATE']:.2f}s) nådd.")
-            should_process = True
-        elif is_silent(audio_for_analysis, current_config['TARGET_SAMPLERATE'], current_config):
-            if len(audio_for_analysis) > current_config['TARGET_SAMPLERATE'] * 1.0:
-                 print("Trigger: Stillhet oppdaget.")
-                 should_process = True
 
-        if should_process:
-            overall_rms = np.sqrt(np.mean(audio_for_analysis**2))
-            if overall_rms < current_config['SILENCE_THRESHOLD']:
-                print(f"Avviser klipp, sannsynligvis bare støy (Overall RMS: {overall_rms:.4f})")
-            else:
-                whisper_executor.submit(process_audio_task, audio_for_analysis, ws, current_config)
-            
-            pcm_buffer.clear()
+        audio_chunk_np = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+        audio_chunk_torch = torch.from_numpy(audio_chunk_np)
+        
+        speech_prob = vad_model(audio_chunk_torch, current_config['TARGET_SAMPLERATE']).item()
+        
+        if speech_prob > current_config['VAD_THRESHOLD']:
+            if not triggered:
+                print("Stemme oppdaget, starter opptak av segment...")
+                triggered = True
+            speech_buffer.extend(chunk)
+            last_speech_time = time.time()
+        elif triggered:
+            speech_buffer.extend(chunk)
+            if time.time() - last_speech_time > current_config['SILENCE_DURATION_S']:
+                print(f"Trigger: Stillhet i {current_config['SILENCE_DURATION_S']}s etter tale.")
+                audio_input = np.frombuffer(speech_buffer, dtype=np.int16).astype(np.float32) / 32768.0
+                whisper_executor.submit(process_audio_task, audio_input, ws, current_config)
+                speech_buffer.clear()
+                triggered = False
+        
+        if triggered and len(speech_buffer) / (current_config['TARGET_SAMPLERATE'] * 2) >= current_config['MAX_BUFFER_SECONDS']:
+            print(f"Trigger: Maks varighet på {current_config['MAX_BUFFER_SECONDS']}s nådd.")
+            audio_input = np.frombuffer(speech_buffer, dtype=np.int16).astype(np.float32) / 32768.0
+            whisper_executor.submit(process_audio_task, audio_input, ws, current_config)
+            speech_buffer.clear()
+            triggered = False
 
 # --- WebSocket-endepunkt ---
 @sock.route('/stream')
 def stream(ws):
     print("Klient koblet til, starter vedvarende ffmpeg-prosess.")
     
-    # **NYTT: Trådsikker konfigurasjon for denne tilkoblingen**
     session_config = DEFAULT_CONFIG.copy()
     config_lock = threading.Lock()
 
@@ -176,7 +183,6 @@ def stream(ws):
             message = ws.receive()
             if message is None: break
             
-            # Sjekk om meldingen er tekst (JSON) eller binærdata (lyd)
             if isinstance(message, str):
                 try:
                     data = json.loads(message)
@@ -189,7 +195,6 @@ def stream(ws):
                 except json.JSONDecodeError:
                     print("Mottok ugyldig JSON-melding.")
             else:
-                # Dette er lyd-data
                 try:
                     ffmpeg_process.stdin.write(message)
                 except BrokenPipeError:
@@ -215,5 +220,5 @@ def stream(ws):
         print("Opprydding fullført.")
 
 if __name__ == '__main__':
-    print(f"Starter tjener på http://0._0.0.0:5000")
+    print(f"Starter tjener på http://0.0.0.0:5000")
     app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
