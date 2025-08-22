@@ -8,3 +8,5 @@ transformers
 soundfile
 librosa
 silero-vad
+sentencepiece
+sacremoses
