@@ -7,7 +7,7 @@ from flask_sock import Sock
 from flask_cors import CORS
 import torch
 import numpy as np
-from transformers import WhisperProcessor, WhisperForConditionalGeneration, AutoModelForSeq2SeqLM, NllbTokenizer
+from transformers import WhisperProcessor, WhisperForConditionalGeneration
 from concurrent.futures import ThreadPoolExecutor
 import json
 import gc 
@@ -16,12 +16,10 @@ import queue
 import threading
 import subprocess
 import time
-import uuid # NYTT: For å lage unike ID-er
 
 # --- Standard Konfigurasjon ---
 DEFAULT_CONFIG = {
     "MODEL_NAME": "NbAiLab/nb-whisper-large",
-    "TRANSLATION_MODEL_NAME": "facebook/nllb-200-distilled-600M",
     "USE_FLOAT16": True,
     "MAX_BUFFER_SECONDS": 10,
     "TARGET_SAMPLERATE": 16000,
@@ -49,7 +47,7 @@ else:
     print("Bruker float32 for stabilitet.")
 
 print(f"Bruker enhet: {device} med dtype: {torch_dtype}")
-processor, model, vad_model, translation_tokenizer, translation_model = None, None, None, None, None
+processor, model, vad_model = None, None, None
 
 try:
     print(f"Laster inn modell: {DEFAULT_CONFIG['MODEL_NAME']}...")
@@ -61,39 +59,13 @@ try:
     vad_model, _ = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', force_reload=False, onnx=False)
     print("VAD-modell lastet inn vellykket!")
 
-    print(f"Laster inn oversettelsesmodell: {DEFAULT_CONFIG['TRANSLATION_MODEL_NAME']}...")
-    # RETTET: Setter kildespråk til bokmål for å matche Whisper-output
-    translation_tokenizer = NllbTokenizer.from_pretrained(DEFAULT_CONFIG['TRANSLATION_MODEL_NAME'], src_lang="nob_Latn")
-    translation_model = AutoModelForSeq2SeqLM.from_pretrained(DEFAULT_CONFIG['TRANSLATION_MODEL_NAME']).to(device)
-    print("Oversettelsesmodell lastet inn vellykket!")
-
 except Exception as e:
     print(f"ADVARSEL: Kunne ikke laste modeller: {e}")
     traceback.print_exc()
 
 # --- Hjelpefunksjoner ---
-def translation_worker_task(text_to_translate, segment_id, ws):
-    """Kjører oversettelsen og sender resultatet når det er klart."""
-    if not translation_model or not translation_tokenizer:
-        ws.send(json.dumps({"type": "translation", "id": segment_id, "text": "[Oversettelse ikke tilgjengelig]"}))
-        return
-    try:
-        with torch.no_grad():
-            inputs = translation_tokenizer(text_to_translate, return_tensors="pt").to(device)
-            # RETTET: Bruker en mer robust metode for å hente språk-ID
-            translated_tokens = translation_model.generate(
-                **inputs,
-                forced_bos_token_id=translation_tokenizer.convert_tokens_to_ids("eng_Latn")
-            )
-            translation = translation_tokenizer.batch_decode(translated_tokens, skip_special_tokens=True)[0]
-            print(f"Oversatt (ID: {segment_id}): {translation}")
-            ws.send(json.dumps({"type": "translation", "id": segment_id, "text": translation}))
-    except Exception:
-        traceback.print_exc()
-        ws.send(json.dumps({"type": "translation", "id": segment_id, "text": "[Feil under oversettelse]"}))
-
 def process_audio_task(audio_input, ws, config):
-    """Transkriberer, sender norsk tekst, og starter oversettelse i bakgrunnen."""
+    """Transkriberer og sender norsk tekst."""
     if not model or not processor:
         ws.send(json.dumps({"error": "Modellen er ikke tilgjengelig"}))
         return
@@ -108,16 +80,12 @@ def process_audio_task(audio_input, ws, config):
             transcription = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0].strip()
 
             if transcription:
-                segment_id = str(uuid.uuid4())
-                print(f"Transkribert (ID: {segment_id}): {transcription}")
-                # 1. Send norsk tekst umiddelbart
+                print(f"Transkribert: {transcription}")
+                # Send norsk tekst
                 ws.send(json.dumps({
                     "type": "transcription",
-                    "id": segment_id,
                     "text": transcription
                 }))
-                # 2. Start oversettelse i en egen tråd
-                whisper_executor.submit(translation_worker_task, transcription, segment_id, ws)
             else:
                 print("Ingen tekst gjenkjent.")
     except Exception:

@@ -1,8 +1,14 @@
 # **Sanntids Transkripsjon og Oversettelse**
 
-Dette prosjektet er en sanntids simultanoversetter som transkriberer samisk og norsk tale til norsk tekst, og deretter oversetter teksten til engelsk. Løsningen er bygget med en Python-backend og et webgrensesnitt, og bruker følgende modeller:
-- **Transkripsjon:** Nasjonalbibliotekets `nb-whisper-large`-modell.
-- **Oversettelse:** Metas `nllb-200-distilled-600M`-modell.
+Dette prosjektet er en sanntids simultanoversetter som transkriberer samisk og norsk tale til norsk tekst, og deretter oversetter teksten til valgfritt målspråk. Løsningen er bygget med en Python-backend for transkripsjon og et webgrensesnitt som håndterer oversettelse, og bruker følgende tjenester:
+- **Transkripsjon (backend):** Nasjonalbibliotekets `nb-whisper-large`-modell.
+- **Oversettelse (frontend):** TartuNLP Translation API v2 for norsk til diverse uralske og samiske språk.
+
+## **Støttede oversettelser**
+
+Applikasjonen kan oversette fra norsk til følgende språk:
+- **Samiske språk:** Nordsamisk, Sørsamisk, Lulesamisk, Enaresamisk, Skoltesamisk
+- **Uralske språk:** Karelsk, Livvi, Vepsisk, Livisk, Khanti, Mansi, Komi-permjakisk, Komi-syrjensk, Udmurtisk, Austmarisk, Vestmarisk, Erzja, Moksja, Lüüdisk, Võro
 
 ## **Bruk med Docker (anbefalt)**
 
@@ -62,7 +68,8 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
     - Ubuntu/Debian: `sudo apt install ffmpeg`
     - macOS: `brew install ffmpeg`
     - Windows: Last ned fra [ffmpeg.org](https://ffmpeg.org/download.html) og legg til i PATH
-3. **CUDA-kompatibel GPU (anbefalt):** For å bruke large-modellene trengs ca. 10-12 GB VRAM. Det går på CPU, men blir mye tregere.
+3. **CUDA-kompatibel GPU (anbefalt):** For å bruke large-modellen trengs ca. 10-12 GB VRAM. Det går på CPU, men blir mye tregere.
+4. **Internettilkobling:** Nødvendig for oversettelse via TartuNLP API
 
 **Steg:**
 
@@ -102,9 +109,18 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
 
 **Bruk:**
 - Klikk på **"Start opptak"** og gi nettleseren tilgang til mikrofonen.
-- Snakk samisk eller norsk. Transkribert norsk tekst dukker opp i venstre boks, og engelsk oversettelse følger kort tid etter i høyre boks.
-- Bruk knappene **"Norsk"**, **"Engelsk"** og **"Begge"** for å velge hvilke tekstbokser som skal vises.
+- Snakk samisk eller norsk. Transkribert norsk tekst dukker opp i venstre boks, og oversettelsen følger kort tid etter i høyre boks.
+- Velg **målspråk** fra nedtrekksmenyen (synlig når "Oversettelse" eller "Begge" er valgt).
+- Bruk knappene **"Norsk"**, **"Oversettelse"** og **"Begge"** for å velge hvilke tekstbokser som skal vises.
 - Klikk på **"Stopp opptak"** for å avslutte.
+
+---
+
+## **Arkitektur**
+
+- **Backend (Python):** Håndterer lydstrøm, talegjenkjenning via Whisper og Voice Activity Detection (VAD).
+- **Frontend (JavaScript):** Tar imot transkribert tekst og kaller TartuNLP Translation API v2 for oversettelse til valgt språk.
+- **API:** TartuNLP Translation API v2 tilbyr gratis maskinoversettelse mellom norsk og mange uralske/samiske språk.
 
 ---
 
@@ -112,3 +128,12 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
 
 - Får du feilmelding om manglende GPU/driver: Sjekk at NVIDIA-drivere og [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) er riktig installert.
 - CPU fallback er støttet, men ytelsen blir betydelig lavere med store modeller.
+- **Oversettelse fungerer ikke:** Sjekk at du har internettilkobling, da oversettelsen krever tilgang til TartuNLP API.
+
+---
+
+## **Kreditter**
+
+- **Whisper-modell:** [Nasjonalbiblioteket - nb-whisper-large](https://huggingface.co/NbAiLab/nb-whisper-large)
+- **Oversettelse:** [TartuNLP Translation API v2](https://api.tartunlp.ai/translation/docs)
+- **VAD (Voice Activity Detection):** [Silero VAD](https://github.com/snakers4/silero-vad)

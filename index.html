@@ -50,8 +50,16 @@
         <div class="mb-4 flex justify-center">
             <div class="inline-flex rounded-md shadow-sm" role="group">
                 <button type="button" id="showNorwegianBtn" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-gray-200 rounded-l-lg hover:bg-blue-700 dark:bg-blue-500 dark:border-gray-600 dark:text-white dark:hover:bg-blue-600">Norsk</button>
-                <button type="button" id="showEnglishBtn" class="px-4 py-2 text-sm font-medium text-gray-900 bg-white border-t border-b border-gray-200 hover:bg-gray-100 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:hover:text-white dark:hover:bg-gray-600">Engelsk</button>
+                <button type="button" id="showTranslationBtn" class="px-4 py-2 text-sm font-medium text-gray-900 bg-white border-t border-b border-gray-200 hover:bg-gray-100 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:hover:text-white dark:hover:bg-gray-600">Oversettelse</button>
                 <button type="button" id="showBothBtn" class="px-4 py-2 text-sm font-medium text-gray-900 bg-white border border-gray-200 rounded-r-md hover:bg-gray-100 dark:bg-gray-700 dark:border-gray-600 dark:text-white dark:hover:text-white dark:hover:bg-gray-600">Begge</button>
+            </div>
+        </div>
+
+        <div id="languageSelectorContainer" class="mb-4 flex justify-center hidden">
+            <div class="flex items-center space-x-2">
+                <label for="targetLanguage" class="text-sm font-medium text-gray-700 dark:text-gray-300">Målspråk:</label>
+                <select id="targetLanguage" class="px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white">
+                </select>
             </div>
         </div>
 
@@ -60,9 +68,9 @@
                 <h2 class="text-lg font-semibold mb-2 text-center">Norsk</h2>
                 <div id="transcriptionContainer" class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 h-64 overflow-y-auto border border-gray-200 dark:border-gray-600"></div>
             </div>
-            <div id="englishContainer" class="hidden">
-                 <h2 class="text-lg font-semibold mb-2 text-center">Engelsk</h2>
-                <div id="translationContainer" class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 h-64 overflow-y-auto border border-gray-200 dark:border-gray-600"></div>
+            <div id="translationContainer" class="hidden">
+                 <h2 class="text-lg font-semibold mb-2 text-center" id="translationHeader">Oversettelse</h2>
+                <div id="translationOutput" class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 h-64 overflow-y-auto border border-gray-200 dark:border-gray-600"></div>
             </div>
         </div>
         
@@ -95,13 +103,16 @@
         const recordButton = document.getElementById('recordButton');
         const statusDiv = document.getElementById('status');
         const transcriptionContainer = document.getElementById('transcriptionContainer');
-        const translationContainer = document.getElementById('translationContainer');
+        const translationOutput = document.getElementById('translationOutput');
         const showNorwegianBtn = document.getElementById('showNorwegianBtn');
-        const showEnglishBtn = document.getElementById('showEnglishBtn');
+        const showTranslationBtn = document.getElementById('showTranslationBtn');
         const showBothBtn = document.getElementById('showBothBtn');
         const norwegianContainerDiv = document.getElementById('norwegianContainer');
-        const englishContainerDiv = document.getElementById('englishContainer');
+        const translationContainerDiv = document.getElementById('translationContainer');
         const outputContainer = document.getElementById('outputContainer');
+        const targetLanguageSelect = document.getElementById('targetLanguage');
+        const languageSelectorContainer = document.getElementById('languageSelectorContainer');
+        const translationHeader = document.getElementById('translationHeader');
         const maxSecondsSlider = document.getElementById('maxSeconds');
         const silenceDurationSlider = document.getElementById('silenceDuration');
         const vadThresholdSlider = document.getElementById('vadThreshold');
@@ -113,6 +124,98 @@
         let mediaRecorder;
         let socket;
         const CHUNK_TIMESLICE_MS = 500;
+        const TARTUNLP_API_URL = 'https://api.tartunlp.ai/translation/v2';
+
+        // Static list of supported Norwegian translation pairs from TartuNLP API
+        // Language code -> Language name mapping (in Norwegian)
+        const supportedLanguages = {
+            'kca': 'Khanti',
+            'koi': 'Komi-permjakisk',
+            'kpv': 'Komi-syrjensk',
+            'krl': 'Karelsk',
+            'liv': 'Livisk',
+            'lud': 'Lüüdisk',
+            'mdf': 'Moksja',
+            'mhr': 'Austmarisk',
+            'mns': 'Mansi',
+            'mrj': 'Vestmarisk',
+            'myv': 'Erzja',
+            'olo': 'Livvi',
+            'sma': 'Sørsamisk',
+            'sme': 'Nordsamisk',
+            'smj': 'Lulesamisk',
+            'smn': 'Enaresamisk',
+            'sms': 'Skoltesamisk',
+            'udm': 'Udmurtisk',
+            'vep': 'Vepsisk',
+            'vro': 'Võro'
+        };
+
+        // Populate the language dropdown on page load
+        function loadSupportedLanguages() {
+            // Clear the dropdown
+            targetLanguageSelect.innerHTML = '';
+
+            // Sort languages alphabetically by name
+            const sortedEntries = Object.entries(supportedLanguages).sort((a, b) => 
+                a[1].localeCompare(b[1])
+            );
+
+            // Populate dropdown
+            sortedEntries.forEach(([code, name]) => {
+                const option = document.createElement('option');
+                option.value = code;
+                option.textContent = name;
+                targetLanguageSelect.appendChild(option);
+            });
+
+            // Set Northern Sami (sme) as default if available, otherwise first option
+            if (supportedLanguages['sme']) {
+                targetLanguageSelect.value = 'sme';
+            } else {
+                targetLanguageSelect.value = sortedEntries[0][0];
+            }
+
+            // Update translation header
+            updateTranslationHeader();
+        }
+
+        // Update translation header based on selected language
+        function updateTranslationHeader() {
+            const selectedLang = targetLanguageSelect.value;
+            translationHeader.textContent = supportedLanguages[selectedLang] || selectedLang.toUpperCase();
+        }
+
+        // Update translation header when language changes
+        targetLanguageSelect.addEventListener('change', updateTranslationHeader);
+
+        // TartuNLP Translation API v2 function
+        async function translateText(text, targetLang) {
+            try {
+                const response = await fetch(TARTUNLP_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        text: text,
+                        src: 'nor',
+                        tgt: targetLang,
+                        domain: 'general'
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Translation API error: ${response.status}`);
+                }
+
+                const data = await response.json();
+                return data.result || '[Oversettelse mislyktes]';
+            } catch (error) {
+                console.error('Translation error:', error);
+                return '[Feil under oversettelse]';
+            }
+        }
 
         function sendConfig(key, value) {
             if (socket && socket.readyState === WebSocket.OPEN) {
@@ -126,7 +229,7 @@
         vadThresholdSlider.addEventListener('input', (e) => { vadThresholdValue.textContent = parseFloat(e.target.value).toFixed(2); sendConfig('VAD_THRESHOLD', e.target.value); });
 
         function updateActiveButton(activeBtn) {
-            [showNorwegianBtn, showEnglishBtn, showBothBtn].forEach(btn => {
+            [showNorwegianBtn, showTranslationBtn, showBothBtn].forEach(btn => {
                 btn.classList.remove('bg-blue-600', 'dark:bg-blue-500', 'text-white');
                 btn.classList.add('bg-white', 'dark:bg-gray-700', 'text-gray-900', 'dark:text-white');
             });
@@ -136,17 +239,20 @@
 
         showNorwegianBtn.addEventListener('click', () => {
             outputContainer.classList.remove('md:grid-cols-2'); outputContainer.classList.add('md:grid-cols-1');
-            norwegianContainerDiv.classList.remove('hidden'); englishContainerDiv.classList.add('hidden');
+            norwegianContainerDiv.classList.remove('hidden'); translationContainerDiv.classList.add('hidden');
+            languageSelectorContainer.classList.add('hidden');
             updateActiveButton(showNorwegianBtn);
         });
-        showEnglishBtn.addEventListener('click', () => {
+        showTranslationBtn.addEventListener('click', () => {
             outputContainer.classList.remove('md:grid-cols-2'); outputContainer.classList.add('md:grid-cols-1');
-            norwegianContainerDiv.classList.add('hidden'); englishContainerDiv.classList.remove('hidden');
-            updateActiveButton(showEnglishBtn);
+            norwegianContainerDiv.classList.add('hidden'); translationContainerDiv.classList.remove('hidden');
+            languageSelectorContainer.classList.remove('hidden');
+            updateActiveButton(showTranslationBtn);
         });
         showBothBtn.addEventListener('click', () => {
             outputContainer.classList.remove('md:grid-cols-1'); outputContainer.classList.add('md:grid-cols-2');
-            norwegianContainerDiv.classList.remove('hidden'); englishContainerDiv.classList.remove('hidden');
+            norwegianContainerDiv.classList.remove('hidden'); translationContainerDiv.classList.remove('hidden');
+            languageSelectorContainer.classList.remove('hidden');
             updateActiveButton(showBothBtn);
         });
 
@@ -174,31 +280,33 @@
                 }
             };
 
-            socket.onmessage = (event) => {
+            socket.onmessage = async (event) => {
                 const data = JSON.parse(event.data);
                 
                 if (data.type === 'transcription') {
+                    // Add Norwegian transcription
                     const norwegianP = document.createElement('p');
                     norwegianP.textContent = data.text;
+                    norwegianP.classList.add('mb-2');
                     transcriptionContainer.appendChild(norwegianP);
-
-                    const englishP = document.createElement('p');
-                    englishP.id = `segment-${data.id}`;
-                    englishP.className = 'text-gray-400 placeholder-dots';
-                    englishP.textContent = 'Oversetter';
-                    translationContainer.appendChild(englishP);
-
                     transcriptionContainer.scrollTop = transcriptionContainer.scrollHeight;
-                    translationContainer.scrollTop = translationContainer.scrollHeight;
 
-                } else if (data.type === 'translation') {
-                    const englishP = document.getElementById(`segment-${data.id}`);
-                    if (englishP) {
-                        englishP.textContent = data.text;
-                        englishP.classList.remove('text-gray-400', 'placeholder-dots');
-                        // RETTET: Legger til autoscroll etter at oversettelsen er på plass
-                        translationContainer.scrollTop = translationContainer.scrollHeight;
-                    }
+                    // Create translation placeholder
+                    const translationP = document.createElement('p');
+                    translationP.classList.add('text-gray-400', 'placeholder-dots', 'mb-2');
+                    translationP.textContent = 'Oversetter';
+                    translationOutput.appendChild(translationP);
+                    translationOutput.scrollTop = translationOutput.scrollHeight;
+
+                    // Translate using TartuNLP API
+                    const targetLang = targetLanguageSelect.value;
+                    const translation = await translateText(data.text, targetLang);
+                    
+                    // Update translation
+                    translationP.textContent = translation;
+                    translationP.classList.remove('text-gray-400', 'placeholder-dots');
+                    translationOutput.scrollTop = translationOutput.scrollHeight;
+
                 } else if (data.error) {
                     console.error("Feil fra tjener:", data.error);
                     statusDiv.textContent = `Feil: ${data.error}`;
@@ -235,6 +343,9 @@
         recordButton.addEventListener('click', () => { if (!isRecording) startRecording(); else stopRecording(); });
         updateActiveButton(showNorwegianBtn);
         showNorwegianBtn.click();
+        
+        // Load supported languages on page load
+        loadSupportedLanguages();
     </script>
 </body>
 </html>
