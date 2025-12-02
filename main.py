@@ -15,6 +15,7 @@ import queue
 import threading
 import subprocess
 import time
+from collections import deque
 
 from model_registry import DEFAULT_CONFIG, SUPPORTED_MODELS
 from simple_websocket.errors import ConnectionClosed
@@ -194,6 +195,7 @@ def process_audio_task(audio_input, config, send_fn):
             torch.cuda.empty_cache()
 
 # --- Arbeider-tråder (uendret) ---
+PRE_TRIGGER_CHUNKS = 6  # keep ~200ms of audio before the trigger fires
 def ffmpeg_reader_thread(ffmpeg_proc, pcm_queue):
     while True:
         chunk = ffmpeg_proc.stdout.read(512 * 2) 
@@ -205,6 +207,7 @@ def pcm_processor_worker(pcm_queue, send_fn, config, config_lock):
     speech_buffer = bytearray()
     triggered = False
     last_speech_time = 0
+    pre_trigger_queue = deque(maxlen=PRE_TRIGGER_CHUNKS)
     
     print("VAD-prosessor startet.")
     while True:
@@ -225,6 +228,10 @@ def pcm_processor_worker(pcm_queue, send_fn, config, config_lock):
             if not triggered:
                 print("Stemme oppdaget, starter opptak av segment...")
                 triggered = True
+                if pre_trigger_queue:
+                    for pre_chunk in pre_trigger_queue:
+                        speech_buffer.extend(pre_chunk)
+                    pre_trigger_queue.clear()
             speech_buffer.extend(chunk)
             last_speech_time = time.time()
         elif triggered:
@@ -235,6 +242,10 @@ def pcm_processor_worker(pcm_queue, send_fn, config, config_lock):
                 whisper_executor.submit(process_audio_task, audio_input, current_config, send_fn)
                 speech_buffer.clear()
                 triggered = False
+                continue
+        else:
+            pre_trigger_queue.append(chunk)
+
         
         if triggered and len(speech_buffer) / (current_config['TARGET_SAMPLERATE'] * 2) >= current_config['MAX_BUFFER_SECONDS']:
             print(f"Trigger: Maks varighet på {current_config['MAX_BUFFER_SECONDS']}s nådd.")
