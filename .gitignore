@@ -1,0 +1,133 @@
+# --- Python & Virtual Environments ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.py,cover
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+.eggs/
+.build/
+python_env/
+.venv/
+venv/
+ENV/
+env/
+Pipfile.lock
+poetry.lock
+poetry.toml
+
+# --- Build & Packaging Outputs ---
+build/
+dist/
+wheelhouse/
+htmlcov/
+.coverage*
+.tox/
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+.pytype/
+.prof
+.profraw
+profile.out
+
+# --- Logs & Runtime Artifacts ---
+logs/
+*.log
+*.out
+*.err
+nohup.out
+
+# --- Data, Models, Checkpoints ---
+*.ckpt
+*.pt
+*.bin
+*.onnx
+*.tflite
+checkpoints/
+models/
+model_cache/
+artifacts/
+data/
+!data/README.md
+runs/
+outputs/
+experiments/
+
+# --- Notebooks ---
+.ipynb_checkpoints/
+*.nbconvert.ipynb
+
+# --- Application Config & Secrets ---
+.env
+.env.*
+*.secret
+*.key
+*.pem
+*.crt
+secrets/
+
+# --- Frontend / Node Tooling ---
+node_modules/
+.npm/
+.npmrc
+pnpm-lock.yaml
+yarn.lock
+package-lock.json
+.vite/
+.next/
+.svelte-kit/
+.eslintcache
+.cache/
+coverage/
+web_dist/
+frontend_dist/
+
+# --- Static Assets & Generated Media ---
+*.webm
+*.wav
+*.mp3
+*.mp4
+*.flac
+*.ogg
+*.opus
+*.gif
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.ico
+
+# --- IDE & Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+*.orig
+.DS_Store
+Thumbs.db
+
+# --- Docker & Containers ---
+*.pid
+*.cid
+*.tar
+*.tar.gz
+*.img
+.docker/
+.dockerignore
+
+# --- Misc ---
+.ssh/
+archive/
+tmp/
+*.tmp
+*.temp
+*.lock
+
+# --- Keep placeholder ---
+!.gitkeep

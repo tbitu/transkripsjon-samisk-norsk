@@ -3,15 +3,19 @@ import torch
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
 
 # Konfigurasjon
-WHISPER_MODEL = "NbAiLab/nb-whisper-large"
+SUPPORTED_MODELS = [
+    "NbAiLab/nb-whisper-large",
+    "NbAiLab/whisper-large-sme",
+]
 USE_FLOAT16 = True
-torch_dtype = "float16" if USE_FLOAT16 else "float32"
+torch_dtype = torch.float16 if USE_FLOAT16 and torch.cuda.is_available() else torch.float32
 
-# 1. Last ned Whisper-modell
-print(f"Laster ned og cacher Whisper-modell: {WHISPER_MODEL}")
-processor = WhisperProcessor.from_pretrained(WHISPER_MODEL)
-model = WhisperForConditionalGeneration.from_pretrained(WHISPER_MODEL, torch_dtype=torch_dtype)
-print("Whisper-modell lastet ned og cachet vellykket.")
+# 1. Last ned Whisper-modeller
+for model_name in SUPPORTED_MODELS:
+    print(f"Laster ned og cacher Whisper-modell: {model_name}")
+    WhisperProcessor.from_pretrained(model_name)
+    WhisperForConditionalGeneration.from_pretrained(model_name, torch_dtype=torch_dtype)
+    print(f"{model_name} lastet ned og cachet vellykket.")
 
 # 2. Last ned Silero VAD-modell
 print("Laster ned og cacher Silero VAD-modell...")

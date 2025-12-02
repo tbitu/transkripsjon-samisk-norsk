@@ -47,6 +47,26 @@
             <div id="status" class="h-6 text-center text-gray-600 dark:text-gray-300 font-medium">Klar til å starte</div>
         </div>
 
+        <div class="mb-6">
+            <h2 class="text-lg font-semibold text-center mb-3">Modellvalg</h2>
+            <div id="modelSelector" class="grid gap-3 md:grid-cols-2">
+                <label class="flex items-start space-x-3 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:border-blue-400">
+                    <input type="radio" name="modelSelection" value="NbAiLab/nb-whisper-large" class="mt-1 text-blue-600 focus:ring-blue-500" checked>
+                    <div>
+                        <div class="font-semibold text-gray-800 dark:text-gray-100">Sámi → Norsk</div>
+                        <div class="text-sm text-gray-500 dark:text-gray-400">nb-whisper-large</div>
+                    </div>
+                </label>
+                <label class="flex items-start space-x-3 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:border-blue-400">
+                    <input type="radio" name="modelSelection" value="NbAiLab/whisper-large-sme" class="mt-1 text-blue-600 focus:ring-blue-500">
+                    <div>
+                        <div class="font-semibold text-gray-800 dark:text-gray-100">Sámi → Sámi</div>
+                        <div class="text-sm text-gray-500 dark:text-gray-400">whisper-large-sme</div>
+                    </div>
+                </label>
+            </div>
+        </div>
+
         <div class="mb-4 flex justify-center">
             <div class="inline-flex rounded-md shadow-sm" role="group">
                 <button type="button" id="showNorwegianBtn" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-gray-200 rounded-l-lg hover:bg-blue-700 dark:bg-blue-500 dark:border-gray-600 dark:text-white dark:hover:bg-blue-600">Norsk</button>
@@ -65,7 +85,7 @@
 
         <div id="outputContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div id="norwegianContainer">
-                <h2 class="text-lg font-semibold mb-2 text-center">Norsk</h2>
+                <h2 id="transcriptionHeader" class="text-lg font-semibold mb-2 text-center">Norsk</h2>
                 <div id="transcriptionContainer" class="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 h-64 overflow-y-auto border border-gray-200 dark:border-gray-600"></div>
             </div>
             <div id="translationContainer" class="hidden">
@@ -113,22 +133,101 @@
         const targetLanguageSelect = document.getElementById('targetLanguage');
         const languageSelectorContainer = document.getElementById('languageSelectorContainer');
         const translationHeader = document.getElementById('translationHeader');
+        const transcriptionHeader = document.getElementById('transcriptionHeader');
         const maxSecondsSlider = document.getElementById('maxSeconds');
         const silenceDurationSlider = document.getElementById('silenceDuration');
         const vadThresholdSlider = document.getElementById('vadThreshold');
         const maxSecondsValue = document.getElementById('maxSecondsValue');
         const silenceDurationValue = document.getElementById('silenceDurationValue');
         const vadThresholdValue = document.getElementById('vadThresholdValue');
+        const modelRadios = document.querySelectorAll('input[name="modelSelection"]');
 
         let isRecording = false;
         let mediaRecorder;
         let socket;
         const CHUNK_TIMESLICE_MS = 500;
         const TARTUNLP_API_URL = 'https://api.tartunlp.ai/translation/v2';
+        const DEFAULT_MODEL = 'NbAiLab/nb-whisper-large';
+        const MODEL_OPTIONS = {
+            'NbAiLab/nb-whisper-large': {
+                label: 'Sámi → Norsk',
+                sourceLang: 'nor',
+                transcriptionLabel: 'Norsk',
+                defaultTarget: 'sme'
+            },
+            'NbAiLab/whisper-large-sme': {
+                label: 'Sámi → Sámi',
+                sourceLang: 'sme',
+                transcriptionLabel: 'Nordsamisk',
+                defaultTarget: 'nor'
+            }
+        };
+        let selectedModel = DEFAULT_MODEL;
+
+        let isModelLoading = false;
+        let lastStatusMessage = statusDiv.textContent || 'Klar til å starte';
+
+        function getModelLabel(modelName) {
+            return MODEL_OPTIONS[modelName]?.label || modelName;
+        }
+
+        function resolveSourceLanguage(modelName) {
+            const entry = MODEL_OPTIONS[modelName];
+            if (entry && entry.sourceLang) {
+                return normalizeLanguageCode(entry.sourceLang);
+            }
+            if (typeof modelName === 'string' && modelName.toLowerCase().includes('whisper-large-sme')) {
+                return 'sme';
+            }
+            return 'nor';
+        }
+
+        function setStatusMessage(message) {
+            lastStatusMessage = message;
+            if (!isModelLoading) {
+                statusDiv.textContent = message;
+            }
+        }
+
+        function setModelLoadingState(isLoading, modelName) {
+            if (isLoading) {
+                isModelLoading = true;
+                statusDiv.textContent = `Laster modell (${getModelLabel(modelName)})...`;
+            } else {
+                isModelLoading = false;
+                statusDiv.textContent = lastStatusMessage;
+            }
+        }
+
+        function handleModelStatusMessage(payload) {
+            const { status, modelName, error } = payload;
+            if (status === 'loading') {
+                setModelLoadingState(true, modelName);
+                return;
+            }
+            if (status === 'ready') {
+                setModelLoadingState(false, modelName);
+                if (isRecording) {
+                    setStatusMessage('Strømmer lyd...');
+                } else {
+                    setStatusMessage('Klar til å starte');
+                }
+                return;
+            }
+            if (status === 'error') {
+                setModelLoadingState(false, modelName);
+                const errorText = error ? `Feil ved lasting av modell: ${error}` : 'Feil ved lasting av modell.';
+                setStatusMessage(errorText);
+            }
+        }
+
+        function normalizeLanguageCode(code) {
+            return (code || '').toString().trim().toLowerCase();
+        }
 
         // Static list of supported Norwegian translation pairs from TartuNLP API
         // Language code -> Language name mapping (in Norwegian)
-        const supportedLanguages = {
+        const supportedLanguages = Object.entries({
             'kca': 'Khanti',
             'koi': 'Komi-permjakisk',
             'kpv': 'Komi-syrjensk',
@@ -138,6 +237,7 @@
             'mdf': 'Moksja',
             'mhr': 'Austmarisk',
             'mns': 'Mansi',
+            'nor': 'Norsk',
             'mrj': 'Vestmarisk',
             'myv': 'Erzja',
             'olo': 'Livvi',
@@ -149,40 +249,70 @@
             'udm': 'Udmurtisk',
             'vep': 'Vepsisk',
             'vro': 'Võro'
-        };
+        }).reduce((acc, [code, name]) => {
+            const normalizedCode = normalizeLanguageCode(code);
+            if (normalizedCode) {
+                acc[normalizedCode] = name;
+            }
+            return acc;
+        }, {});
+        if (!supportedLanguages.nor) {
+            supportedLanguages.nor = 'Norsk';
+        }
 
         // Populate the language dropdown on page load
         function loadSupportedLanguages() {
-            // Clear the dropdown
             targetLanguageSelect.innerHTML = '';
 
-            // Sort languages alphabetically by name
             const sortedEntries = Object.entries(supportedLanguages).sort((a, b) => 
                 a[1].localeCompare(b[1])
             );
+            const seenCodes = new Set();
 
-            // Populate dropdown
             sortedEntries.forEach(([code, name]) => {
+                if (seenCodes.has(code)) return;
+                seenCodes.add(code);
                 const option = document.createElement('option');
                 option.value = code;
                 option.textContent = name;
                 targetLanguageSelect.appendChild(option);
             });
 
-            // Set Northern Sami (sme) as default if available, otherwise first option
-            if (supportedLanguages['sme']) {
+            if (supportedLanguages.sme) {
                 targetLanguageSelect.value = 'sme';
-            } else {
+            } else if (sortedEntries.length > 0) {
                 targetLanguageSelect.value = sortedEntries[0][0];
             }
 
-            // Update translation header
             updateTranslationHeader();
+        }
+
+        function selectTargetLanguage(targetCode) {
+            const normalizedTarget = normalizeLanguageCode(targetCode);
+            const optionValues = Array.from(targetLanguageSelect.options).map(option => option.value);
+            if (normalizedTarget && optionValues.includes(normalizedTarget)) {
+                targetLanguageSelect.value = normalizedTarget;
+            } else if (!targetLanguageSelect.value && optionValues.length > 0) {
+                targetLanguageSelect.selectedIndex = 0;
+            }
+            updateTranslationHeader();
+        }
+
+        function applyModelUI(modelName) {
+            const modelSettings = MODEL_OPTIONS[modelName] || {};
+            const transLabel = modelSettings.transcriptionLabel || 'Norsk';
+            transcriptionHeader.textContent = transLabel;
+            showNorwegianBtn.textContent = transLabel;
+            if (modelSettings.defaultTarget) {
+                selectTargetLanguage(modelSettings.defaultTarget);
+            } else {
+                updateTranslationHeader();
+            }
         }
 
         // Update translation header based on selected language
         function updateTranslationHeader() {
-            const selectedLang = targetLanguageSelect.value;
+            const selectedLang = normalizeLanguageCode(targetLanguageSelect.value);
             translationHeader.textContent = supportedLanguages[selectedLang] || selectedLang.toUpperCase();
         }
 
@@ -190,7 +320,14 @@
         targetLanguageSelect.addEventListener('change', updateTranslationHeader);
 
         // TartuNLP Translation API v2 function
-        async function translateText(text, targetLang) {
+        async function translateText(text, targetLang, modelNameOverride) {
+            const resolvedModel = modelNameOverride || selectedModel;
+            const sourceLang = resolveSourceLanguage(resolvedModel);
+            const normalizedTarget = normalizeLanguageCode(targetLang) || 'nor';
+
+            if (normalizedTarget === sourceLang) {
+                return text; // Avoid unnecessary API call when languages already match
+            }
             try {
                 const response = await fetch(TARTUNLP_API_URL, {
                     method: 'POST',
@@ -199,8 +336,8 @@
                     },
                     body: JSON.stringify({
                         text: text,
-                        src: 'nor',
-                        tgt: targetLang,
+                        src: sourceLang,
+                        tgt: normalizedTarget,
                         domain: 'general'
                     })
                 });
@@ -219,14 +356,26 @@
 
         function sendConfig(key, value) {
             if (socket && socket.readyState === WebSocket.OPEN) {
-                const configMessage = { type: 'config', key: key, value: parseFloat(value) };
+                const configMessage = { type: 'config', key, value };
                 socket.send(JSON.stringify(configMessage));
             }
         }
         
-        maxSecondsSlider.addEventListener('input', (e) => { maxSecondsValue.textContent = `${e.target.value} s`; sendConfig('MAX_BUFFER_SECONDS', e.target.value); });
-        silenceDurationSlider.addEventListener('input', (e) => { silenceDurationValue.textContent = `${parseFloat(e.target.value).toFixed(1)} s`; sendConfig('SILENCE_DURATION_S', e.target.value); });
-        vadThresholdSlider.addEventListener('input', (e) => { vadThresholdValue.textContent = parseFloat(e.target.value).toFixed(2); sendConfig('VAD_THRESHOLD', e.target.value); });
+        maxSecondsSlider.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            maxSecondsValue.textContent = `${value} s`;
+            sendConfig('MAX_BUFFER_SECONDS', value);
+        });
+        silenceDurationSlider.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            silenceDurationValue.textContent = `${value.toFixed(1)} s`;
+            sendConfig('SILENCE_DURATION_S', value);
+        });
+        vadThresholdSlider.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value);
+            vadThresholdValue.textContent = value.toFixed(2);
+            sendConfig('VAD_THRESHOLD', value);
+        });
 
         function updateActiveButton(activeBtn) {
             [showNorwegianBtn, showTranslationBtn, showBothBtn].forEach(btn => {
@@ -236,6 +385,20 @@
             activeBtn.classList.add('bg-blue-600', 'dark:bg-blue-500', 'text-white');
             activeBtn.classList.remove('bg-white', 'dark:bg-gray-700', 'text-gray-900', 'dark:text-white');
         }
+
+        modelRadios.forEach((radio) => {
+            if (radio.checked) {
+                selectedModel = radio.value;
+            }
+            radio.addEventListener('change', (event) => {
+                if (!event.target.checked) return;
+                selectedModel = event.target.value;
+                applyModelUI(selectedModel);
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    sendConfig('MODEL_NAME', selectedModel);
+                }
+            });
+        });
 
         showNorwegianBtn.addEventListener('click', () => {
             outputContainer.classList.remove('md:grid-cols-2'); outputContainer.classList.add('md:grid-cols-1');
@@ -261,13 +424,14 @@
             socket = new WebSocket(`${protocol}//${window.location.host}/stream`);
 
             socket.onopen = async () => {
-                statusDiv.textContent = 'Tilkoblet. Starter mikrofon...';
+                setStatusMessage('Tilkoblet. Starter mikrofon...');
                 try {
-                    sendConfig('MAX_BUFFER_SECONDS', maxSecondsSlider.value);
-                    sendConfig('SILENCE_DURATION_S', silenceDurationSlider.value);
-                    sendConfig('VAD_THRESHOLD', vadThresholdSlider.value);
+                    sendConfig('MODEL_NAME', selectedModel);
+                    sendConfig('MAX_BUFFER_SECONDS', parseFloat(maxSecondsSlider.value));
+                    sendConfig('SILENCE_DURATION_S', parseFloat(silenceDurationSlider.value));
+                    sendConfig('VAD_THRESHOLD', parseFloat(vadThresholdSlider.value));
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    isRecording = true; updateButtonUI(true); statusDiv.textContent = 'Strømmer lyd...';
+                    isRecording = true; updateButtonUI(true); setStatusMessage('Strømmer lyd...');
                     mediaRecorder = new MediaRecorder(stream);
                     mediaRecorder.ondataavailable = (event) => {
                         if (event.data.size > 0 && socket.readyState === WebSocket.OPEN) socket.send(event.data);
@@ -275,13 +439,17 @@
                     mediaRecorder.start(CHUNK_TIMESLICE_MS);
                 } catch (err) {
                     console.error("Feil ved mikrofon-tilgang:", err);
-                    statusDiv.textContent = 'Feil: Fikk ikke tilgang til mikrofon.';
+                    setStatusMessage('Feil: Fikk ikke tilgang til mikrofon.');
                     socket.close();
                 }
             };
 
             socket.onmessage = async (event) => {
                 const data = JSON.parse(event.data);
+                if (data.type === 'model_status') {
+                    handleModelStatusMessage(data);
+                    return;
+                }
                 
                 if (data.type === 'transcription') {
                     // Add Norwegian transcription
@@ -300,7 +468,7 @@
 
                     // Translate using TartuNLP API
                     const targetLang = targetLanguageSelect.value;
-                    const translation = await translateText(data.text, targetLang);
+                    const translation = await translateText(data.text, targetLang, data.modelName);
                     
                     // Update translation
                     translationP.textContent = translation;
@@ -309,12 +477,12 @@
 
                 } else if (data.error) {
                     console.error("Feil fra tjener:", data.error);
-                    statusDiv.textContent = `Feil: ${data.error}`;
+                    setStatusMessage(`Feil: ${data.error}`);
                 }
             };
 
-            socket.onclose = () => { if (isRecording) stopRecording(false); statusDiv.textContent = 'Frakoblet. Klar til å starte.'; };
-            socket.onerror = (error) => { console.error("WebSocket feil:", error); statusDiv.textContent = 'Tilkoblingsfeil.'; };
+            socket.onclose = () => { if (isRecording) stopRecording(false); setStatusMessage('Frakoblet. Klar til å starte.'); };
+            socket.onerror = (error) => { console.error("WebSocket feil:", error); setStatusMessage('Tilkoblingsfeil.'); };
         }
 
         function stopRecording(closeSocket = true) {
@@ -325,7 +493,7 @@
             }
             if (socket && closeSocket && socket.readyState === WebSocket.OPEN) socket.close();
             updateButtonUI(false);
-            statusDiv.textContent = 'Opptaket er stoppet.';
+            setStatusMessage('Opptaket er stoppet.');
         }
         
         function updateButtonUI(recording) {
@@ -346,6 +514,7 @@
         
         // Load supported languages on page load
         loadSupportedLanguages();
+        applyModelUI(selectedModel);
     </script>
 </body>
 </html>

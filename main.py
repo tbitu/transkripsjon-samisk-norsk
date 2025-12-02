@@ -27,6 +27,75 @@ DEFAULT_CONFIG = {
     "SILENCE_DURATION_S": 1.0,
 }
 
+SUPPORTED_MODELS = {
+    "NbAiLab/nb-whisper-large": {
+        "language": "no",
+        "label": "Sámi → Norsk"
+    },
+    "NbAiLab/whisper-large-sme": {
+        "language": None,
+        "label": "Sámi → Sámi"
+    },
+}
+
+
+class ModelManager:
+    def __init__(self, available_models, device_name, preferred_dtype):
+        self.available_models = available_models
+        self.device = device_name
+        self._target_device = torch.device(device_name)
+        self.torch_dtype = preferred_dtype
+        self._lock = threading.Lock()
+        self._active_model_name = None
+        self._active_entry = None
+
+    def preload(self, model_name):
+        self.get(model_name)
+
+    def get(self, model_name):
+        if model_name not in self.available_models:
+            raise ValueError(f"Ustøttet modell forespurt: {model_name}")
+        return self._ensure_loaded(model_name)
+
+    def unload(self):
+        with self._lock:
+            self._unload_current_locked()
+
+    def current_model_name(self):
+        with self._lock:
+            return self._active_model_name
+
+    def _ensure_loaded(self, model_name):
+        with self._lock:
+            if self._active_model_name == model_name and self._active_entry:
+                return self._active_entry["processor"], self._active_entry["model"]
+            self._load_model_locked(model_name)
+            return self._active_entry["processor"], self._active_entry["model"]
+
+    def _load_model_locked(self, model_name):
+        print(f"Laster inn modell: {model_name}...")
+        self._unload_current_locked()
+        processor = WhisperProcessor.from_pretrained(model_name)
+        model = WhisperForConditionalGeneration.from_pretrained(model_name, torch_dtype=self.torch_dtype)
+        model = model.to(self._target_device)
+        self._active_entry = {"processor": processor, "model": model}
+        self._active_model_name = model_name
+        print(f"{model_name} ble lastet og plassert på {self._target_device}.")
+
+    def _unload_current_locked(self):
+        if not self._active_entry:
+            return
+        print(f"Laster ut modell: {self._active_model_name}")
+        model = self._active_entry.get("model")
+        processor = self._active_entry.get("processor")
+        del model
+        del processor
+        self._active_entry = None
+        self._active_model_name = None
+        gc.collect()
+        if self._target_device.type == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
 # --- Oppsett av Flask-applikasjon ---
 app = Flask(__name__)
 CORS(app)
@@ -47,14 +116,11 @@ else:
     print("Bruker float32 for stabilitet.")
 
 print(f"Bruker enhet: {device} med dtype: {torch_dtype}")
-processor, model, vad_model = None, None, None
+model_manager = ModelManager(SUPPORTED_MODELS, device, torch_dtype)
+vad_model = None
 
 try:
-    print(f"Laster inn modell: {DEFAULT_CONFIG['MODEL_NAME']}...")
-    processor = WhisperProcessor.from_pretrained(DEFAULT_CONFIG['MODEL_NAME'])
-    model = WhisperForConditionalGeneration.from_pretrained(DEFAULT_CONFIG['MODEL_NAME'], torch_dtype=torch_dtype).to(device)
-    print("Whisper-modell og prosessor ble lastet inn vellykket!")
-    
+    model_manager.preload(DEFAULT_CONFIG['MODEL_NAME'])
     print("Laster inn VAD-modell...")
     vad_model, _ = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', force_reload=False, onnx=False)
     print("VAD-modell lastet inn vellykket!")
@@ -65,9 +131,12 @@ except Exception as e:
 
 # --- Hjelpefunksjoner ---
 def process_audio_task(audio_input, ws, config):
-    """Transkriberer og sender norsk tekst."""
-    if not model or not processor:
-        ws.send(json.dumps({"error": "Modellen er ikke tilgjengelig"}))
+    """Transkriberer lydklipp med valgt modell og sender tekst."""
+    model_name = config.get('MODEL_NAME', DEFAULT_CONFIG['MODEL_NAME'])
+    try:
+        processor, active_model = model_manager.get(model_name)
+    except ValueError as exc:
+        ws.send(json.dumps({"error": str(exc)}))
         return
     try:
         with torch.no_grad():
@@ -76,7 +145,15 @@ def process_audio_task(audio_input, ws, config):
             input_features = processed_input.input_features.to(device, dtype=torch_dtype)
             attention_mask = processed_input.attention_mask.to(device) if "attention_mask" in processed_input else torch.ones_like(input_features, device=device)
             
-            predicted_ids = model.generate(input_features, attention_mask=attention_mask, language="no", task="transcribe")
+            language_code = SUPPORTED_MODELS.get(model_name, {}).get('language', 'no')
+            generation_kwargs = {
+                "attention_mask": attention_mask,
+                "task": "transcribe"
+            }
+            if language_code:
+                generation_kwargs["language"] = language_code
+
+            predicted_ids = active_model.generate(input_features, **generation_kwargs)
             transcription = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0].strip()
 
             if transcription:
@@ -84,7 +161,8 @@ def process_audio_task(audio_input, ws, config):
                 # Send norsk tekst
                 ws.send(json.dumps({
                     "type": "transcription",
-                    "text": transcription
+                    "text": transcription,
+                    "modelName": model_name
                 }))
             else:
                 print("Ingen tekst gjenkjent.")
@@ -168,11 +246,54 @@ def stream(ws):
                 try:
                     data = json.loads(message)
                     if data.get('type') == 'config':
-                        with config_lock:
-                            key, value = data.get('key'), data.get('value')
-                            if key in session_config:
+                        key, value = data.get('key'), data.get('value')
+                        if key == 'MODEL_NAME':
+                            if value in SUPPORTED_MODELS:
+                                with config_lock:
+                                    current_model = session_config.get('MODEL_NAME')
+                                if current_model == value and model_manager.current_model_name() == value:
+                                    ws.send(json.dumps({
+                                        "type": "model_status",
+                                        "status": "ready",
+                                        "modelName": value
+                                    }))
+                                    continue
+                                ws.send(json.dumps({
+                                    "type": "model_status",
+                                    "status": "loading",
+                                    "modelName": value
+                                }))
+                                try:
+                                    model_manager.preload(value)
+                                except Exception as load_error:
+                                    print(f"Kunne ikke laste modell {value}: {load_error}")
+                                    traceback.print_exc()
+                                    ws.send(json.dumps({
+                                        "type": "model_status",
+                                        "status": "error",
+                                        "modelName": value,
+                                        "error": str(load_error)
+                                    }))
+                                    continue
+                                with config_lock:
+                                    session_config[key] = value
                                 print(f"Oppdaterer konfigurasjon: {key} = {value}")
-                                session_config[key] = value
+                                ws.send(json.dumps({
+                                    "type": "model_status",
+                                    "status": "ready",
+                                    "modelName": value
+                                }))
+                            else:
+                                print(f"Ignorerer ukjent modellvalg: {value}")
+                        elif key in session_config:
+                            try:
+                                numeric_value = float(value)
+                            except (TypeError, ValueError):
+                                print(f"Kunne ikke parse numerisk verdi for {key}: {value}")
+                                continue
+                            with config_lock:
+                                session_config[key] = numeric_value
+                            print(f"Oppdaterer konfigurasjon: {key} = {numeric_value}")
                 except json.JSONDecodeError:
                     print("Mottok ugyldig JSON-melding.")
             else:
