@@ -23,9 +23,9 @@ COPY requirements.txt .
 RUN pip3 install --no-cache-dir --break-system-packages torch torchaudio --index-url https://download.pytorch.org/whl/cu129
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
-# Last ned og cache modellen under bygging
-# Kopier kun nedlastingsskriptet først
-COPY download_model.py .
+# Last ned og cache modellene under bygging
+# Kopier kun nedlastingsskriptet og modellregisteret først
+COPY download_model.py model_registry.py ./
 # Kjør skriptet for å laste ned modellen. Dette steget vil ta tid.
 RUN python3 download_model.py
 # Slett skriptet etterpå for å holde imaget rent

@@ -1,7 +1,7 @@
 # Sanntidstranskripsjon og oversettelse
 
 Dette prosjektet er en sanntids-simultanoversetter som transkriberer samisk og norsk tale til norsk tekst, og deretter oversetter teksten til valgfritt målspråk. Løsningen er bygget med en Python-backend for transkripsjon og et webgrensesnitt som håndterer oversettelse, og bruker følgende tjenester:
-- **Transkripsjon (backend):** Nasjonalbibliotekets `nb-whisper-large`-modell
+- **Transkripsjon (backend):** `NbAiLab/nb-whisper-large`, `NbAiLab/whisper-large-sme` og `GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned`
 - **Oversettelse (frontend):** TartuNLP Translation API v2 for norsk til diverse uralske og samiske språk
 
 ## Støttede oversettelser
@@ -9,6 +9,16 @@ Dette prosjektet er en sanntids-simultanoversetter som transkriberer samisk og n
 Applikasjonen kan oversette fra norsk til følgende språk:
 - **Samiske språk:** nordsamisk, sørsamisk, lulesamisk, enaresamisk, skoltesamisk
 - **Uralske språk:** karelsk, livvi, vepsisk, livisk, khanti, mansi, komi-permjakisk, komi-syrjensk, udmurtisk, austmarisk, vestmarisk, erzja, moksja, lüüdisk, võro
+
+## Tilgjengelige ASR-modeller
+
+| Modell | Type | Typisk bruk |
+| --- | --- | --- |
+| `NbAiLab/nb-whisper-large` | Whisper seq2seq | Gir norsk tekst direkte fra samisk/norsk tale (standardvalg). |
+| `NbAiLab/whisper-large-sme` | Whisper seq2seq | Transkriberer til nordsamisk tekst uten oversettelse. |
+| `GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned` | Wav2Vec2 CTC | Lettere modell trent på Sametinget-opptak, leverer nordsamisk tekst (CTC). |
+
+Alle modellene krever mono PCM 16 kHz-lyd. Wav2Vec2-modellen kjører alltid i float32; på GPU bruker den mindre VRAM enn Whisper Large, men lastetid på CPU kan være lengre.
 
 ## Bruk med Docker (anbefalt)
 
@@ -120,7 +130,7 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
 
 ## Arkitektur
 
-- **Backend (Python):** Håndterer lydstrøm, talegjenkjenning via Whisper og Voice Activity Detection (VAD)
+- **Backend (Python):** Håndterer lydstrøm, talegjenkjenning via Whisper/Wav2Vec2 og Voice Activity Detection (VAD)
 - **Frontend (JavaScript):** Tar imot transkribert tekst og kaller TartuNLP Translation API v2 for oversettelse til valgt språk
 - **API:** TartuNLP Translation API v2 tilbyr gratis maskinoversettelse mellom norsk og mange uralske/samiske språk
 
@@ -136,6 +146,7 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
 
 ## Kreditter
 
-- **Whisper-modell:** [Nasjonalbiblioteket – nb-whisper-large](https://huggingface.co/NbAiLab/nb-whisper-large)
+- **Whisper-modeller:** [NbAiLab/nb-whisper-large](https://huggingface.co/NbAiLab/nb-whisper-large) og [NbAiLab/whisper-large-sme](https://huggingface.co/NbAiLab/whisper-large-sme)
+- **Wav2Vec2-modell:** [GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned](https://huggingface.co/GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned)
 - **Oversettelse:** [TartuNLP Translation API v2](https://api.tartunlp.ai/translation/docs)
 - **VAD (Voice Activity Detection):** [Silero VAD](https://github.com/snakers4/silero-vad)

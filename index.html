@@ -49,7 +49,7 @@
 
         <div class="mb-6">
             <h2 class="text-lg font-semibold text-center mb-3">Modellvalg</h2>
-            <div id="modelSelector" class="grid gap-3 md:grid-cols-2">
+            <div id="modelSelector" class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
                 <label class="flex items-start space-x-3 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:border-blue-400">
                     <input type="radio" name="modelSelection" value="NbAiLab/nb-whisper-large" class="mt-1 text-blue-600 focus:ring-blue-500" checked>
                     <div>
@@ -62,6 +62,13 @@
                     <div>
                         <div class="font-semibold text-gray-800 dark:text-gray-100">Sámi → Sámi</div>
                         <div class="text-sm text-gray-500 dark:text-gray-400">whisper-large-sme</div>
+                    </div>
+                </label>
+                <label class="flex items-start space-x-3 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:border-blue-400">
+                    <input type="radio" name="modelSelection" value="GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned" class="mt-1 text-blue-600 focus:ring-blue-500">
+                    <div>
+                        <div class="font-semibold text-gray-800 dark:text-gray-100">Sámi (CTC)</div>
+                        <div class="text-sm text-gray-500 dark:text-gray-400">wav2vec2-large-sami</div>
                     </div>
                 </label>
             </div>
@@ -159,6 +166,12 @@
                 label: 'Sámi → Sámi',
                 sourceLang: 'sme',
                 transcriptionLabel: 'Nordsamisk',
+                defaultTarget: 'nor'
+            },
+            'GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned': {
+                label: 'Sámi (CTC)',
+                sourceLang: 'sme',
+                transcriptionLabel: 'Nordsamisk (CTC)',
                 defaultTarget: 'nor'
             }
         };
@@ -396,6 +409,8 @@
                 applyModelUI(selectedModel);
                 if (socket && socket.readyState === WebSocket.OPEN) {
                     sendConfig('MODEL_NAME', selectedModel);
+                } else {
+                    preloadModel(selectedModel);
                 }
             });
         });
@@ -419,9 +434,27 @@
             updateActiveButton(showBothBtn);
         });
 
-        function startRecording() {
+        async function startRecording() {
+            if (isRecording) return;
+            let stream;
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            try {
+                setStatusMessage('Venter på mikrofontilgang...');
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (err) {
+                console.error('Feil ved mikrofon-tilgang:', err);
+                setStatusMessage('Feil: Fikk ikke tilgang til mikrofon.');
+                return;
+            }
+
             socket = new WebSocket(`${protocol}//${window.location.host}/stream`);
+
+            const cleanupIdleStream = () => {
+                if (!isRecording && stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                    stream = null;
+                }
+            };
 
             socket.onopen = async () => {
                 setStatusMessage('Tilkoblet. Starter mikrofon...');
@@ -430,7 +463,6 @@
                     sendConfig('MAX_BUFFER_SECONDS', parseFloat(maxSecondsSlider.value));
                     sendConfig('SILENCE_DURATION_S', parseFloat(silenceDurationSlider.value));
                     sendConfig('VAD_THRESHOLD', parseFloat(vadThresholdSlider.value));
-                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     isRecording = true; updateButtonUI(true); setStatusMessage('Strømmer lyd...');
                     mediaRecorder = new MediaRecorder(stream);
                     mediaRecorder.ondataavailable = (event) => {
@@ -438,8 +470,9 @@
                     };
                     mediaRecorder.start(CHUNK_TIMESLICE_MS);
                 } catch (err) {
-                    console.error("Feil ved mikrofon-tilgang:", err);
-                    setStatusMessage('Feil: Fikk ikke tilgang til mikrofon.');
+                    console.error('Feil ved oppstart av opptak:', err);
+                    setStatusMessage('Feil: Klarte ikke å starte opptak.');
+                    cleanupIdleStream();
                     socket.close();
                 }
             };
@@ -481,8 +514,19 @@
                 }
             };
 
-            socket.onclose = () => { if (isRecording) stopRecording(false); setStatusMessage('Frakoblet. Klar til å starte.'); };
-            socket.onerror = (error) => { console.error("WebSocket feil:", error); setStatusMessage('Tilkoblingsfeil.'); };
+            socket.onclose = () => {
+                if (isRecording) {
+                    stopRecording(false);
+                } else {
+                    cleanupIdleStream();
+                }
+                setStatusMessage('Frakoblet. Klar til å starte.');
+            };
+            socket.onerror = (error) => {
+                console.error("WebSocket feil:", error);
+                cleanupIdleStream();
+                setStatusMessage('Tilkoblingsfeil.');
+            };
         }
 
         function stopRecording(closeSocket = true) {
@@ -512,6 +556,26 @@
         updateActiveButton(showNorwegianBtn);
         showNorwegianBtn.click();
         
+        async function preloadModel(modelName) {
+            try {
+                setModelLoadingState(true, modelName);
+                const response = await fetch('/preload-model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ modelName })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Klarte ikke å laste modell.');
+                }
+                setModelLoadingState(false, modelName);
+            } catch (error) {
+                console.error('Preload error:', error);
+                setStatusMessage(error.message || 'Klarte ikke å laste modell.');
+                setModelLoadingState(false, modelName);
+            }
+        }
+
         // Load supported languages on page load
         loadSupportedLanguages();
         applyModelUI(selectedModel);
