@@ -14,6 +14,8 @@ Applikasjonen kan oversette fra norsk til følgende språk:
 
 Du kan enkelt kjøre prosjektet med ferdigbygd Docker-image fra GitHub Container Registry (GHCR). Dette gir deg korrekt miljø for PyTorch og GPU-støtte uten å installere Python og avhengigheter manuelt.
 
+> ⚠️ Det finnes også et hjelpeskript for Windows/WSL ([wsl-run-transkripsjon.ps1](wsl-run-transkripsjon.ps1)), men det er utestet/ufullført og bør brukes kun som veiledning.
+
 ### 1. Kjør med ferdigbygd image fra GHCR
 
 **Forutsetninger:**
