@@ -176,9 +176,84 @@
             }
         };
         let selectedModel = DEFAULT_MODEL;
+        const SPEAKER_COLORS = ['#2563eb', '#ea580c', '#16a34a', '#db2777', '#0891b2', '#9333ea', '#ca8a04', '#0d9488'];
+        const speakerStyles = new Map();
 
         let isModelLoading = false;
         let lastStatusMessage = statusDiv.textContent || 'Klar til å starte';
+
+        function resetSpeakerStyles() {
+            speakerStyles.clear();
+        }
+
+        function speakerDisplayName(id) {
+            if (!id || id === 'speaker_unknown') {
+                return 'Ukjent taler';
+            }
+            const match = id.match(/(\d+)/);
+            if (match) {
+                return `Taler ${Number(match[1]) + 1}`;
+            }
+            return id.replace(/[_-]/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+        }
+
+        function getSpeakerStyle(id) {
+            const key = id || 'speaker_unknown';
+            if (!speakerStyles.has(key)) {
+                const color = SPEAKER_COLORS[speakerStyles.size % SPEAKER_COLORS.length];
+                speakerStyles.set(key, { color, label: speakerDisplayName(key) });
+            }
+            return speakerStyles.get(key);
+        }
+
+        function formatTimestamp(value) {
+            if (!isFinite(value)) return '';
+            const totalSeconds = Math.max(0, value);
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = Math.floor(totalSeconds % 60);
+            return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function formatTimeRange(start, end) {
+            if (!isFinite(start) || !isFinite(end)) {
+                return '';
+            }
+            return `${formatTimestamp(start)} – ${formatTimestamp(end)}`;
+        }
+
+        function createSegmentBlock(meta, text, start, end, textClasses = '') {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'mb-4';
+
+            const header = document.createElement('div');
+            header.className = 'flex items-center justify-between text-sm mb-1';
+            const speakerSpan = document.createElement('span');
+            speakerSpan.className = 'font-semibold';
+            speakerSpan.style.color = meta.color;
+            speakerSpan.textContent = meta.label;
+
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'text-xs text-gray-400 dark:text-gray-300';
+            timeSpan.textContent = formatTimeRange(start, end);
+
+            header.appendChild(speakerSpan);
+            header.appendChild(timeSpan);
+
+            const body = document.createElement('p');
+            body.className = `text-base ${textClasses}`.trim();
+            body.textContent = text;
+
+            wrapper.appendChild(header);
+            wrapper.appendChild(body);
+
+            return { wrapper, textNode: body };
+        }
+
+        function resetTranscriptionViews() {
+            transcriptionContainer.innerHTML = '';
+            translationOutput.innerHTML = '';
+            resetSpeakerStyles();
+        }
 
         function getModelLabel(modelName) {
             return MODEL_OPTIONS[modelName]?.label || modelName;
@@ -440,6 +515,7 @@
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             try {
                 setStatusMessage('Venter på mikrofontilgang...');
+                resetTranscriptionViews();
                 stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             } catch (err) {
                 console.error('Feil ved mikrofon-tilgang:', err);
@@ -485,29 +561,16 @@
                 }
                 
                 if (data.type === 'transcription') {
-                    // Add Norwegian transcription
-                    const norwegianP = document.createElement('p');
-                    norwegianP.textContent = data.text;
-                    norwegianP.classList.add('mb-2');
-                    transcriptionContainer.appendChild(norwegianP);
-                    transcriptionContainer.scrollTop = transcriptionContainer.scrollHeight;
-
-                    // Create translation placeholder
-                    const translationP = document.createElement('p');
-                    translationP.classList.add('text-gray-400', 'placeholder-dots', 'mb-2');
-                    translationP.textContent = 'Oversetter';
-                    translationOutput.appendChild(translationP);
-                    translationOutput.scrollTop = translationOutput.scrollHeight;
-
-                    // Translate using TartuNLP API
-                    const targetLang = targetLanguageSelect.value;
-                    const translation = await translateText(data.text, targetLang, data.modelName);
-                    
-                    // Update translation
-                    translationP.textContent = translation;
-                    translationP.classList.remove('text-gray-400', 'placeholder-dots');
-                    translationOutput.scrollTop = translationOutput.scrollHeight;
-
+                    if (Array.isArray(data.segments) && data.segments.length) {
+                        data.segments.forEach((segment) => renderSegment(segment, data.modelName));
+                    } else if (data.text) {
+                        renderSegment({
+                            speakerId: 'speaker_unknown',
+                            text: data.text,
+                            start: 0,
+                            end: 0
+                        }, data.modelName);
+                    }
                 } else if (data.error) {
                     console.error("Feil fra tjener:", data.error);
                     setStatusMessage(`Feil: ${data.error}`);
@@ -574,6 +637,28 @@
                 setStatusMessage(error.message || 'Klarte ikke å laste modell.');
                 setModelLoadingState(false, modelName);
             }
+        }
+
+        function renderSegment(segment, modelName) {
+            const meta = getSpeakerStyle(segment.speakerId);
+            const transcriptionBlock = createSegmentBlock(meta, segment.text, segment.start, segment.end);
+            transcriptionContainer.appendChild(transcriptionBlock.wrapper);
+            transcriptionContainer.scrollTop = transcriptionContainer.scrollHeight;
+
+            const translationBlock = createSegmentBlock(meta, 'Oversetter', segment.start, segment.end, 'text-gray-400 placeholder-dots');
+            translationOutput.appendChild(translationBlock.wrapper);
+            translationOutput.scrollTop = translationOutput.scrollHeight;
+
+            const targetLang = targetLanguageSelect.value;
+            translateText(segment.text, targetLang, segment.modelName || modelName)
+                .then((result) => {
+                    translationBlock.textNode.textContent = result;
+                    translationBlock.textNode.classList.remove('text-gray-400', 'placeholder-dots');
+                })
+                .catch(() => {
+                    translationBlock.textNode.textContent = '[Feil under oversettelse]';
+                    translationBlock.textNode.classList.remove('placeholder-dots');
+                });
         }
 
         // Load supported languages on page load

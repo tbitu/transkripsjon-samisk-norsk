@@ -1,7 +1,8 @@
 # Sanntidstranskripsjon og oversettelse
 
-Dette prosjektet er en sanntids-simultanoversetter som transkriberer samisk og norsk tale til norsk tekst, og deretter oversetter teksten til valgfritt målspråk. Løsningen er bygget med en Python-backend for transkripsjon og et webgrensesnitt som håndterer oversettelse, og bruker følgende tjenester:
+Dette prosjektet er en sanntids-simultanoversetter som transkriberer samisk og norsk tale til norsk tekst, og deretter oversetter teksten til valgfritt målspråk. Løsningen er bygget med en Python-backend for transkripsjon og et webgrensesnitt som håndterer oversettelse. I denne forken er backend-en utvidet med diarisering (hvem snakker når) via `diart` + `pyannote.audio`, slik at hver tekstbit vises med egen farge i UI-et. Teknologistakken består av:
 - **Transkripsjon (backend):** `NbAiLab/nb-whisper-large`, `NbAiLab/whisper-large-sme` og `GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned`
+- **Diarisering (backend):** `diart` (`SpeakerDiarization`) + `pyannote/segmentation` og `pyannote/embedding` (krever Hugging Face-token)
 - **Oversettelse (frontend):** TartuNLP Translation API v2 for norsk til diverse uralske og samiske språk
 
 ## Støttede oversettelser
@@ -19,6 +20,13 @@ Applikasjonen kan oversette fra norsk til følgende språk:
 | `GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned` | Wav2Vec2 CTC | Lettere modell trent på Sametinget-opptak, leverer nordsamisk tekst (CTC). |
 
 Alle modellene krever mono PCM 16 kHz-lyd. Wav2Vec2-modellen kjører alltid i float32; på GPU bruker den mindre VRAM enn Whisper Large, men lastetid på CPU kan være lengre.
+
+## Diarisering og fargekoding
+
+- **diart + pyannote:** Serveren kjører en kontinuerlig `SpeakerDiarization`-pipeline (5 s vindu / 0,5 s steg) og sender resultatet videre til samme 2 s vindu som Whisper/Wav2Vec2 transkriberer. Hver bit tekst blir dermed tagget med `speakerId`, start- og sluttid.
+- **Frontend-oppdatering:** Brukergrensesnittet viser nå segmentene i kronologisk rekkefølge med konsistente farger per taler. Oversettelsen følger samme segmentstruktur slik at målteksten henger sammen med riktig taler.
+- **Krav:** Pyannote-modellene er lisensiert. Sørg for å [logge inn hos Hugging Face](https://huggingface.co/settings/tokens) og akseptere vilkårene for `pyannote/segmentation` og `pyannote/embedding`. Sett deretter miljøvariabelen `PYANNOTE_TOKEN` (eller logg inn med `huggingface-cli login`) før du starter serveren.
+- **Ressursbruk:** diariseringsmodellene legger til ca. 3–4 GB VRAM. Hvis GPU-en er marginal, kan du kjøre diarisering på CPU ved å sette `CUDA_VISIBLE_DEVICES=` før oppstart, men forvent høyere latens.
 
 ## Bruk med Docker (anbefalt)
 
@@ -82,6 +90,7 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
     - Windows: Last ned fra [ffmpeg.org](https://ffmpeg.org/download.html) og legg til i PATH
 3. **CUDA-kompatibel GPU (anbefalt):** For å bruke large-modellen trengs ca. 10–12 GB VRAM. Det går på CPU, men blir mye tregere.
 4. **Internettilkobling:** Nødvendig for oversettelse via TartuNLP API
+5. **Hugging Face-token for pyannote-modeller:** Logg inn med `huggingface-cli login` eller sett `PYANNOTE_TOKEN=<ditt_token>`, og sørg for at du har godkjent tilgang til `pyannote/segmentation` og `pyannote/embedding` på Hugging Face.
 
 **Steg:**
 

@@ -9,13 +9,19 @@ import torch
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import json
-import gc 
+import gc
 import traceback
 import queue
 import threading
 import subprocess
-import time
-from collections import deque
+import os
+
+from rx.subject import Subject
+from rx import operators as ops
+import diart.operators as dops
+from diart import SpeakerDiarization, SpeakerDiarizationConfig
+from diart import models as diart_models
+from pyannote.core import Annotation, SlidingWindowFeature, SlidingWindow
 
 from model_registry import DEFAULT_CONFIG, SUPPORTED_MODELS
 from simple_websocket.errors import ConnectionClosed
@@ -101,6 +107,31 @@ CORS(app)
 sock = Sock(app)
 whisper_executor = ThreadPoolExecutor(max_workers=2)
 
+DIARIZATION_DURATION = 5.0  # seconds per diarization chunk
+DIARIZATION_STEP = 0.5  # seconds between diarization windows
+TRANSCRIPTION_WINDOW = 2.0  # seconds of audio merged before transcription
+
+pyannote_token = (
+    os.getenv("PYANNOTE_TOKEN")
+    or os.getenv("PYANNOTE_AUTH_TOKEN")
+    or os.getenv("HUGGINGFACE_TOKEN")
+    or os.getenv("HF_TOKEN")
+)
+
+try:
+    diar_segmentation_model = diart_models.SegmentationModel.from_pyannote(
+        "pyannote/segmentation", use_hf_token=pyannote_token or True
+    )
+    diar_embedding_model = diart_models.EmbeddingModel.from_pyannote(
+        "pyannote/embedding", use_hf_token=pyannote_token or True
+    )
+    print("Pyannote-modeller for diariseringspipeline lastet inn.")
+except Exception as pyannote_error:
+    diar_segmentation_model = None
+    diar_embedding_model = None
+    print(f"ADVARSEL: Kunne ikke laste pyannote-modeller: {pyannote_error}")
+    traceback.print_exc()
+
 @app.route('/')
 def index():
     return send_from_directory('.', 'index.html')
@@ -128,30 +159,52 @@ else:
 
 print(f"Bruker enhet: {device} med dtype: {torch_dtype}")
 model_manager = ModelManager(SUPPORTED_MODELS, device, torch_dtype)
-vad_model = None
-
 try:
     model_manager.preload(DEFAULT_CONFIG['MODEL_NAME'])
-    print("Laster inn VAD-modell...")
-    vad_model, _ = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', force_reload=False, onnx=False)
-    print("VAD-modell lastet inn vellykket!")
 
 except Exception as e:
     print(f"ADVARSEL: Kunne ikke laste modeller: {e}")
     traceback.print_exc()
 
-# --- Hjelpefunksjoner ---
-def process_audio_task(audio_input, config, send_fn):
-    """Transkriberer lydklipp med valgt modell og sender tekst."""
+def concat(chunks, collar=0.05):
+    """Slår sammen (diarisering, lyd) par slik at tidslinjene blir kontinuerlige."""
+    first_annotation = chunks[0][0]
+    first_waveform = chunks[0][1]
+    annotation = Annotation(uri=first_annotation.uri)
+    data = []
+    for ann, wav in chunks:
+        annotation.update(ann)
+        data.append(wav.data)
+    annotation = annotation.support(collar)
+    window = SlidingWindow(
+        first_waveform.sliding_window.duration,
+        first_waveform.sliding_window.step,
+        first_waveform.sliding_window.start,
+    )
+    data = np.concatenate(data, axis=0)
+    return annotation, SlidingWindowFeature(data, window)
+
+
+def select_dominant_speaker(annotation: Annotation) -> str:
+    speakers = annotation.labels()
+    if not speakers:
+        return "speaker_unknown"
+    return max(speakers, key=lambda spk: annotation.label_duration(spk))
+
+
+def waveform_bounds(waveform: SlidingWindowFeature) -> tuple[float, float]:
+    start = float(waveform.sliding_window.start)
+    duration = waveform.data.shape[0] * waveform.sliding_window.duration
+    end = start + duration
+    return start, end
+
+
+def transcribe_audio_segment(audio_input: np.ndarray, config: dict[str, float]):
     model_name = config.get('MODEL_NAME', DEFAULT_CONFIG['MODEL_NAME'])
-    try:
-        processor, active_model, spec = model_manager.get(model_name)
-    except ValueError as exc:
-        send_fn({"error": str(exc)})
-        return
+    processor, active_model, spec = model_manager.get(model_name)
+    transcription = ""
     try:
         with torch.no_grad():
-            print(f"Prosesserer {len(audio_input) / config['TARGET_SAMPLERATE']:.2f} sekunder med lyd...")
             if spec['type'] == 'whisper':
                 processed_input = processor(audio_input, sampling_rate=config['TARGET_SAMPLERATE'], return_tensors="pt")
                 input_features = processed_input.input_features.to(device, dtype=torch_dtype)
@@ -174,28 +227,113 @@ def process_audio_task(audio_input, config, send_fn):
                 logits = active_model(input_values, attention_mask=attention_mask).logits
                 predicted_ids = torch.argmax(logits, dim=-1)
                 transcription = processor.batch_decode(predicted_ids)[0].strip()
-
-            if transcription:
-                print(f"Transkribert: {transcription}")
-                # Send norsk tekst
-                send_fn({
-                    "type": "transcription",
-                    "text": transcription,
-                    "modelName": model_name
-                })
-            else:
-                print("Ingen tekst gjenkjent.")
-    except Exception:
-        print("En uventet feil oppstod under transkribering:")
-        traceback.print_exc() 
-        send_fn({"error": "Internal server error during transcription."})
     finally:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-# --- Arbeider-tråder (uendret) ---
-PRE_TRIGGER_CHUNKS = 6  # keep ~200ms of audio before the trigger fires
+    return transcription, model_name
+
+
+def build_segment_payload(annotation: Annotation, waveform: SlidingWindowFeature, text: str) -> dict:
+    speaker_id = select_dominant_speaker(annotation)
+    start, end = waveform_bounds(waveform)
+    return {
+        "speakerId": speaker_id,
+        "text": text,
+        "start": start,
+        "end": end,
+    }
+
+
+class ReactiveDiarizationPipeline:
+    def __init__(self, sample_rate: int, session_config: dict, config_lock: threading.Lock, send_fn):
+        self.sample_rate = sample_rate
+        self.session_config = session_config
+        self.config_lock = config_lock
+        self.send_fn = send_fn
+        self.closed = False
+        diar_config_kwargs = {
+            "duration": DIARIZATION_DURATION,
+            "step": DIARIZATION_STEP,
+            "latency": "min",
+            "tau_active": 0.5,
+            "rho_update": 0.1,
+            "delta_new": 0.57,
+            "sample_rate": sample_rate,
+        }
+        if diar_segmentation_model is not None:
+            diar_config_kwargs["segmentation"] = diar_segmentation_model
+        if diar_embedding_model is not None:
+            diar_config_kwargs["embedding"] = diar_embedding_model
+        diar_config = SpeakerDiarizationConfig(**diar_config_kwargs)
+        self.diarization = SpeakerDiarization(diar_config)
+        self.audio_subject = Subject()
+        batch_size = max(1, int(round(TRANSCRIPTION_WINDOW / DIARIZATION_STEP)))
+        self.subscription = self.audio_subject.pipe(
+            dops.rearrange_audio_stream(
+                duration=DIARIZATION_DURATION,
+                step=DIARIZATION_STEP,
+                sample_rate=sample_rate,
+            ),
+            ops.buffer_with_count(count=batch_size),
+            ops.map(self.diarization),
+            ops.map(concat),
+            ops.filter(lambda ann_wav: ann_wav[0].get_timeline().duration() > 0),
+        ).subscribe(
+            on_next=self._handle_chunk,
+            on_error=self._handle_error,
+        )
+
+    def feed_pcm(self, chunk: bytes):
+        if self.closed:
+            return
+        if not chunk:
+            return
+        audio_chunk = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
+        self.audio_subject.on_next(audio_chunk.reshape(1, -1))
+
+    def _handle_chunk(self, ann_wav):
+        annotation, waveform = ann_wav
+        whisper_executor.submit(self._transcribe_and_emit, annotation, waveform)
+
+    def _transcribe_and_emit(self, annotation: Annotation, waveform: SlidingWindowFeature):
+        try:
+            audio_data = waveform.data.astype(np.float32)
+            if audio_data.ndim == 2 and audio_data.shape[1] == 1:
+                audio_data = audio_data[:, 0]
+            audio_flat = audio_data.reshape(-1)
+            with self.config_lock:
+                config_snapshot = self.session_config.copy()
+            text, model_name = transcribe_audio_segment(audio_flat, config_snapshot)
+            if not text:
+                return
+            payload = {
+                "type": "transcription",
+                "segments": [build_segment_payload(annotation, waveform, text)],
+                "modelName": model_name
+            }
+            self.send_fn(payload)
+        except Exception:
+            print("En uventet feil oppstod under transkribering:")
+            traceback.print_exc()
+            self.send_fn({"error": "Internal server error during transcription."})
+
+    def _handle_error(self, error):
+        print(f"Feil i diariseringspipeline: {error}")
+
+    def complete(self):
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self.audio_subject.on_completed()
+        finally:
+            self.subscription.dispose()
+            self.diarization.reset()
+
+
+# --- Arbeider-tråder ---
 def ffmpeg_reader_thread(ffmpeg_proc, pcm_queue):
     while True:
         chunk = ffmpeg_proc.stdout.read(512 * 2) 
@@ -203,56 +341,13 @@ def ffmpeg_reader_thread(ffmpeg_proc, pcm_queue):
         pcm_queue.put(chunk)
     pcm_queue.put(None)
 
-def pcm_processor_worker(pcm_queue, send_fn, config, config_lock):
-    speech_buffer = bytearray()
-    triggered = False
-    last_speech_time = 0
-    pre_trigger_queue = deque(maxlen=PRE_TRIGGER_CHUNKS)
-    
-    print("VAD-prosessor startet.")
+def pcm_forwarder_worker(pcm_queue, pipeline: ReactiveDiarizationPipeline):
     while True:
         chunk = pcm_queue.get()
         if chunk is None:
-            if speech_buffer:
-                with config_lock: current_config = config.copy()
-                audio_input = np.frombuffer(speech_buffer, dtype=np.int16).astype(np.float32) / 32768.0
-                whisper_executor.submit(process_audio_task, audio_input, current_config, send_fn)
+            pipeline.complete()
             break
-        
-        with config_lock: current_config = config.copy()
-        audio_chunk_np = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
-        audio_chunk_torch = torch.from_numpy(audio_chunk_np)
-        speech_prob = vad_model(audio_chunk_torch, current_config['TARGET_SAMPLERATE']).item()
-        
-        if speech_prob > current_config['VAD_THRESHOLD']:
-            if not triggered:
-                print("Stemme oppdaget, starter opptak av segment...")
-                triggered = True
-                if pre_trigger_queue:
-                    for pre_chunk in pre_trigger_queue:
-                        speech_buffer.extend(pre_chunk)
-                    pre_trigger_queue.clear()
-            speech_buffer.extend(chunk)
-            last_speech_time = time.time()
-        elif triggered:
-            speech_buffer.extend(chunk)
-            if time.time() - last_speech_time > current_config['SILENCE_DURATION_S']:
-                print(f"Trigger: Stillhet i {current_config['SILENCE_DURATION_S']}s etter tale.")
-                audio_input = np.frombuffer(speech_buffer, dtype=np.int16).astype(np.float32) / 32768.0
-                whisper_executor.submit(process_audio_task, audio_input, current_config, send_fn)
-                speech_buffer.clear()
-                triggered = False
-                continue
-        else:
-            pre_trigger_queue.append(chunk)
-
-        
-        if triggered and len(speech_buffer) / (current_config['TARGET_SAMPLERATE'] * 2) >= current_config['MAX_BUFFER_SECONDS']:
-            print(f"Trigger: Maks varighet på {current_config['MAX_BUFFER_SECONDS']}s nådd.")
-            audio_input = np.frombuffer(speech_buffer, dtype=np.int16).astype(np.float32) / 32768.0
-            whisper_executor.submit(process_audio_task, audio_input, current_config, send_fn)
-            speech_buffer.clear()
-            triggered = False
+        pipeline.feed_pcm(chunk)
 
 # --- WebSocket-endepunkt ---
 @sock.route('/stream')
@@ -321,7 +416,13 @@ def stream(ws):
     ffmpeg_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     pcm_queue = queue.Queue()
     reader = threading.Thread(target=ffmpeg_reader_thread, args=(ffmpeg_process, pcm_queue))
-    processor_thread = threading.Thread(target=pcm_processor_worker, args=(pcm_queue, safe_ws_send, session_config, config_lock))
+    diar_pipeline = ReactiveDiarizationPipeline(
+        sample_rate=int(session_config['TARGET_SAMPLERATE']),
+        session_config=session_config,
+        config_lock=config_lock,
+        send_fn=safe_ws_send,
+    )
+    processor_thread = threading.Thread(target=pcm_forwarder_worker, args=(pcm_queue, diar_pipeline))
     reader.start()
     processor_thread.start()
     try:
@@ -382,6 +483,7 @@ def stream(ws):
         if reader.is_alive(): pcm_queue.put(None)
         reader.join(timeout=2)
         processor_thread.join(timeout=2)
+        diar_pipeline.complete()
         print("Opprydding fullført.")
 
 if __name__ == '__main__':
