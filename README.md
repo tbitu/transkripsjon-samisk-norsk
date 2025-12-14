@@ -7,6 +7,7 @@ Dette prosjektet er en sanntids-simultanoversetter som transkriberer samisk og n
 ## Støttede oversettelser
 
 Applikasjonen kan oversette fra norsk til følgende språk:
+- Engelsk
 - **Samiske språk:** nordsamisk, sørsamisk, lulesamisk, enaresamisk, skoltesamisk
 - **Uralske språk:** karelsk, livvi, vepsisk, livisk, khanti, mansi, komi-permjakisk, komi-syrjensk, udmurtisk, austmarisk, vestmarisk, erzja, moksja, lüüdisk, võro
 
