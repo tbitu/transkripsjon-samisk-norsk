@@ -279,4 +279,5 @@ def stream(ws):
 
 if __name__ == '__main__':
     print(f"Starter tjener på http://0.0.0.0:5000")
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    # WebSocket sessions are long-lived; threaded mode allows multiple clients at once.
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False, threaded=True)
