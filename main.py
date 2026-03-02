@@ -15,6 +15,7 @@ import queue
 import threading
 import subprocess
 import time
+import os
 from collections import deque
 
 from model_registry import DEFAULT_CONFIG, SUPPORTED_MODELS
@@ -91,7 +92,12 @@ class ModelManager:
 app = Flask(__name__)
 CORS(app)
 sock = Sock(app)
-asr_executor = ThreadPoolExecutor(max_workers=2)
+
+# Shared model objects are global; serialize access to avoid multi-client contention.
+ASR_MAX_WORKERS = max(1, int(os.getenv("ASR_MAX_WORKERS", "1")))
+asr_executor = ThreadPoolExecutor(max_workers=ASR_MAX_WORKERS)
+asr_model_lock = threading.Lock()
+vad_lock = threading.Lock()
 
 @app.route('/')
 def index():
@@ -126,31 +132,31 @@ def process_audio_task(audio_input, config, send_fn):
     """Transkriberer lydklipp med wav2vec2 og sender tekst."""
     processor, active_model, _ = model_manager.get()
     try:
-        with torch.no_grad():
-            print(f"Prosesserer {len(audio_input) / config['TARGET_SAMPLERATE']:.2f} sekunder med lyd...")
-            processed_input = processor(audio_input, sampling_rate=config['TARGET_SAMPLERATE'], return_tensors="pt", padding="longest")
-            input_values = processed_input.input_values.to(device)
-            attention_mask = processed_input.attention_mask.to(device) if "attention_mask" in processed_input else None
-            logits = active_model(input_values, attention_mask=attention_mask).logits
-            predicted_ids = torch.argmax(logits, dim=-1)
-            transcription = processor.batch_decode(predicted_ids)[0].strip()
+        with asr_model_lock:
+            with torch.no_grad():
+                print(f"Prosesserer {len(audio_input) / config['TARGET_SAMPLERATE']:.2f} sekunder med lyd...")
+                processed_input = processor(audio_input, sampling_rate=config['TARGET_SAMPLERATE'], return_tensors="pt", padding="longest")
+                input_values = processed_input.input_values.to(device)
+                attention_mask = processed_input.attention_mask.to(device) if "attention_mask" in processed_input else None
+                logits = active_model(input_values, attention_mask=attention_mask).logits
+                predicted_ids = torch.argmax(logits, dim=-1)
+                transcription = processor.batch_decode(predicted_ids)[0].strip()
 
-            if transcription:
-                print(f"Transkribert: {transcription}")
-                send_fn({
-                    "type": "transcription",
-                    "text": transcription,
-                })
-            else:
-                print("Ingen tekst gjenkjent.")
+                if transcription:
+                    print(f"Transkribert: {transcription}")
+                    send_fn({
+                        "type": "transcription",
+                        "text": transcription,
+                    })
+                else:
+                    print("Ingen tekst gjenkjent.")
     except Exception:
         print("En uventet feil oppstod under transkribering:")
         traceback.print_exc() 
         send_fn({"error": "Internal server error during transcription."})
     finally:
+        # Avoid per-request empty_cache(), which can introduce long pauses under load.
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
 
 # --- Arbeider-tråder (uendret) ---
 PRE_TRIGGER_CHUNKS = 6  # keep ~200ms of audio before the trigger fires
@@ -180,7 +186,8 @@ def pcm_processor_worker(pcm_queue, send_fn, config, config_lock):
         with config_lock: current_config = config.copy()
         audio_chunk_np = np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768.0
         audio_chunk_torch = torch.from_numpy(audio_chunk_np)
-        speech_prob = vad_model(audio_chunk_torch, current_config['TARGET_SAMPLERATE']).item()
+        with vad_lock:
+            speech_prob = vad_model(audio_chunk_torch, current_config['TARGET_SAMPLERATE']).item()
         
         if speech_prob > current_config['VAD_THRESHOLD']:
             if not triggered:
