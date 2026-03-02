@@ -105,7 +105,7 @@ class ModelManager:
 app = Flask(__name__)
 CORS(app)
 sock = Sock(app)
-whisper_executor = ThreadPoolExecutor(max_workers=2)
+asr_executor = ThreadPoolExecutor(max_workers=2)
 
 DIARIZATION_DURATION = 5.0  # seconds per diarization chunk
 DIARIZATION_STEP = 0.5  # seconds between diarization windows
@@ -205,28 +205,12 @@ def transcribe_audio_segment(audio_input: np.ndarray, config: dict[str, float]):
     transcription = ""
     try:
         with torch.no_grad():
-            if spec['type'] == 'whisper':
-                processed_input = processor(audio_input, sampling_rate=config['TARGET_SAMPLERATE'], return_tensors="pt")
-                input_features = processed_input.input_features.to(device, dtype=torch_dtype)
-                attention_mask = processed_input.attention_mask.to(device) if "attention_mask" in processed_input else torch.ones_like(input_features, device=device)
-
-                language_code = spec.get('language', 'no')
-                generation_kwargs = {
-                    "attention_mask": attention_mask,
-                    "task": "transcribe"
-                }
-                if language_code:
-                    generation_kwargs["language"] = language_code
-
-                predicted_ids = active_model.generate(input_features, **generation_kwargs)
-                transcription = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0].strip()
-            else:
-                processed_input = processor(audio_input, sampling_rate=config['TARGET_SAMPLERATE'], return_tensors="pt", padding="longest")
-                input_values = processed_input.input_values.to(device)
-                attention_mask = processed_input.attention_mask.to(device) if "attention_mask" in processed_input else None
-                logits = active_model(input_values, attention_mask=attention_mask).logits
-                predicted_ids = torch.argmax(logits, dim=-1)
-                transcription = processor.batch_decode(predicted_ids)[0].strip()
+            processed_input = processor(audio_input, sampling_rate=config['TARGET_SAMPLERATE'], return_tensors="pt", padding="longest")
+            input_values = processed_input.input_values.to(device)
+            attention_mask = processed_input.attention_mask.to(device) if "attention_mask" in processed_input else None
+            logits = active_model(input_values, attention_mask=attention_mask).logits
+            predicted_ids = torch.argmax(logits, dim=-1)
+            transcription = processor.batch_decode(predicted_ids)[0].strip()
     finally:
         gc.collect()
         if torch.cuda.is_available():
@@ -295,7 +279,7 @@ class ReactiveDiarizationPipeline:
 
     def _handle_chunk(self, ann_wav):
         annotation, waveform = ann_wav
-        whisper_executor.submit(self._transcribe_and_emit, annotation, waveform)
+        asr_executor.submit(self._transcribe_and_emit, annotation, waveform)
 
     def _transcribe_and_emit(self, annotation: Annotation, waveform: SlidingWindowFeature):
         try:

@@ -47,33 +47,6 @@
             <div id="status" class="h-6 text-center text-gray-600 dark:text-gray-300 font-medium">Klar til å starte</div>
         </div>
 
-        <div class="mb-6">
-            <h2 class="text-lg font-semibold text-center mb-3">Modellvalg</h2>
-            <div id="modelSelector" class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                <label class="flex items-start space-x-3 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:border-blue-400">
-                    <input type="radio" name="modelSelection" value="NbAiLab/nb-whisper-large" class="mt-1 text-blue-600 focus:ring-blue-500" checked>
-                    <div>
-                        <div class="font-semibold text-gray-800 dark:text-gray-100">Sámi → Norsk</div>
-                        <div class="text-sm text-gray-500 dark:text-gray-400">nb-whisper-large</div>
-                    </div>
-                </label>
-                <label class="flex items-start space-x-3 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:border-blue-400">
-                    <input type="radio" name="modelSelection" value="NbAiLab/whisper-large-sme" class="mt-1 text-blue-600 focus:ring-blue-500">
-                    <div>
-                        <div class="font-semibold text-gray-800 dark:text-gray-100">Sámi → Sámi</div>
-                        <div class="text-sm text-gray-500 dark:text-gray-400">whisper-large-sme</div>
-                    </div>
-                </label>
-                <label class="flex items-start space-x-3 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:border-blue-400">
-                    <input type="radio" name="modelSelection" value="GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned" class="mt-1 text-blue-600 focus:ring-blue-500">
-                    <div>
-                        <div class="font-semibold text-gray-800 dark:text-gray-100">Sámi (CTC)</div>
-                        <div class="text-sm text-gray-500 dark:text-gray-400">wav2vec2-large-sami</div>
-                    </div>
-                </label>
-            </div>
-        </div>
-
         <div class="mb-4 flex justify-center">
             <div class="inline-flex rounded-md shadow-sm" role="group">
                 <button type="button" id="showNorwegianBtn" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-gray-200 rounded-l-lg hover:bg-blue-700 dark:bg-blue-500 dark:border-gray-600 dark:text-white dark:hover:bg-blue-600">Norsk</button>
@@ -147,27 +120,14 @@
         const maxSecondsValue = document.getElementById('maxSecondsValue');
         const silenceDurationValue = document.getElementById('silenceDurationValue');
         const vadThresholdValue = document.getElementById('vadThresholdValue');
-        const modelRadios = document.querySelectorAll('input[name="modelSelection"]');
 
         let isRecording = false;
         let mediaRecorder;
         let socket;
         const CHUNK_TIMESLICE_MS = 500;
         const TARTUNLP_API_URL = 'https://api.tartunlp.ai/translation/v2';
-        const DEFAULT_MODEL = 'NbAiLab/nb-whisper-large';
+        const DEFAULT_MODEL = 'GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned';
         const MODEL_OPTIONS = {
-            'NbAiLab/nb-whisper-large': {
-                label: 'Sámi → Norsk',
-                sourceLang: 'nor',
-                transcriptionLabel: 'Norsk',
-                defaultTarget: 'sme'
-            },
-            'NbAiLab/whisper-large-sme': {
-                label: 'Sámi → Sámi',
-                sourceLang: 'sme',
-                transcriptionLabel: 'Nordsamisk',
-                defaultTarget: 'nor'
-            },
             'GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned': {
                 label: 'Sámi (CTC)',
                 sourceLang: 'sme',
@@ -264,10 +224,7 @@
             if (entry && entry.sourceLang) {
                 return normalizeLanguageCode(entry.sourceLang);
             }
-            if (typeof modelName === 'string' && modelName.toLowerCase().includes('whisper-large-sme')) {
-                return 'sme';
-            }
-            return 'nor';
+            return 'sme';
         }
 
         function setStatusMessage(message) {
@@ -473,22 +430,6 @@
             activeBtn.classList.add('bg-blue-600', 'dark:bg-blue-500', 'text-white');
             activeBtn.classList.remove('bg-white', 'dark:bg-gray-700', 'text-gray-900', 'dark:text-white');
         }
-
-        modelRadios.forEach((radio) => {
-            if (radio.checked) {
-                selectedModel = radio.value;
-            }
-            radio.addEventListener('change', (event) => {
-                if (!event.target.checked) return;
-                selectedModel = event.target.value;
-                applyModelUI(selectedModel);
-                if (socket && socket.readyState === WebSocket.OPEN) {
-                    sendConfig('MODEL_NAME', selectedModel);
-                } else {
-                    preloadModel(selectedModel);
-                }
-            });
-        });
 
         showNorwegianBtn.addEventListener('click', () => {
             outputContainer.classList.remove('md:grid-cols-2'); outputContainer.classList.add('md:grid-cols-1');

@@ -1,7 +1,7 @@
 # Sanntidstranskripsjon og oversettelse
 
 Dette prosjektet er en sanntids-simultanoversetter som transkriberer samisk og norsk tale til norsk tekst, og deretter oversetter teksten til valgfritt målspråk. Løsningen er bygget med en Python-backend for transkripsjon og et webgrensesnitt som håndterer oversettelse. I denne forken er backend-en utvidet med diarisering (hvem snakker når) via `diart` + `pyannote.audio`, slik at hver tekstbit vises med egen farge i UI-et. Teknologistakken består av:
-- **Transkripsjon (backend):** `NbAiLab/nb-whisper-large`, `NbAiLab/whisper-large-sme` og `GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned`
+- **Transkripsjon (backend):** `GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned`
 - **Diarisering (backend):** `diart` (`SpeakerDiarization`) + `pyannote/segmentation` og `pyannote/embedding` (krever Hugging Face-token)
 - **Oversettelse (frontend):** TartuNLP Translation API v2 for norsk til diverse uralske og samiske språk
 
@@ -15,15 +15,13 @@ Applikasjonen kan oversette fra norsk til følgende språk:
 
 | Modell | Type | Typisk bruk |
 | --- | --- | --- |
-| `NbAiLab/nb-whisper-large` | Whisper seq2seq | Gir norsk tekst direkte fra samisk/norsk tale (standardvalg). |
-| `NbAiLab/whisper-large-sme` | Whisper seq2seq | Transkriberer til nordsamisk tekst uten oversettelse. |
-| `GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned` | Wav2Vec2 CTC | Lettere modell trent på Sametinget-opptak, leverer nordsamisk tekst (CTC). |
+| `GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned` | Wav2Vec2 CTC | Transkriberer nordsamisk tale til tekst (CTC). |
 
-Alle modellene krever mono PCM 16 kHz-lyd. Wav2Vec2-modellen kjører alltid i float32; på GPU bruker den mindre VRAM enn Whisper Large, men lastetid på CPU kan være lengre.
+Modellen krever mono PCM 16 kHz-lyd og kjører alltid i float32.
 
 ## Diarisering og fargekoding
 
-- **diart + pyannote:** Serveren kjører en kontinuerlig `SpeakerDiarization`-pipeline (5 s vindu / 0,5 s steg) og sender resultatet videre til samme 2 s vindu som Whisper/Wav2Vec2 transkriberer. Hver bit tekst blir dermed tagget med `speakerId`, start- og sluttid.
+- **diart + pyannote:** Serveren kjører en kontinuerlig `SpeakerDiarization`-pipeline (5 s vindu / 0,5 s steg) og sender resultatet videre til samme 2 s vindu som Wav2Vec2 transkriberer. Hver bit tekst blir dermed tagget med `speakerId`, start- og sluttid.
 - **Frontend-oppdatering:** Brukergrensesnittet viser nå segmentene i kronologisk rekkefølge med konsistente farger per taler. Oversettelsen følger samme segmentstruktur slik at målteksten henger sammen med riktig taler.
 - **Krav:** Pyannote-modellene er lisensiert. Sørg for å [logge inn hos Hugging Face](https://huggingface.co/settings/tokens) og akseptere vilkårene for `pyannote/segmentation` og `pyannote/embedding`. Sett deretter miljøvariabelen `PYANNOTE_TOKEN` (eller logg inn med `huggingface-cli login`) før du starter serveren.
 - **Ressursbruk:** diariseringsmodellene legger til ca. 3–4 GB VRAM. Hvis GPU-en er marginal, kan du kjøre diarisering på CPU ved å sette `CUDA_VISIBLE_DEVICES=` før oppstart, men forvent høyere latens.
@@ -139,7 +137,7 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
 
 ## Arkitektur
 
-- **Backend (Python):** Håndterer lydstrøm, talegjenkjenning via Whisper/Wav2Vec2 og Voice Activity Detection (VAD)
+- **Backend (Python):** Håndterer lydstrøm, talegjenkjenning via Wav2Vec2 og Voice Activity Detection (VAD)
 - **Frontend (JavaScript):** Tar imot transkribert tekst og kaller TartuNLP Translation API v2 for oversettelse til valgt språk
 - **API:** TartuNLP Translation API v2 tilbyr gratis maskinoversettelse mellom norsk og mange uralske/samiske språk
 
@@ -155,7 +153,6 @@ docker run --gpus all -p 5000:5000 transkripsjon-samisk-norsk
 
 ## Kreditter
 
-- **Whisper-modeller:** [NbAiLab/nb-whisper-large](https://huggingface.co/NbAiLab/nb-whisper-large) og [NbAiLab/whisper-large-sme](https://huggingface.co/NbAiLab/whisper-large-sme)
 - **Wav2Vec2-modell:** [GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned](https://huggingface.co/GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned)
 - **Oversettelse:** [TartuNLP Translation API v2](https://api.tartunlp.ai/translation/docs)
 - **VAD (Voice Activity Detection):** [Silero VAD](https://github.com/snakers4/silero-vad)
