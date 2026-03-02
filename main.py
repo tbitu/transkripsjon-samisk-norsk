@@ -118,19 +118,8 @@ pyannote_token = (
     or os.getenv("HF_TOKEN")
 )
 
-try:
-    diar_segmentation_model = diart_models.SegmentationModel.from_pyannote(
-        "pyannote/segmentation", use_hf_token=pyannote_token or True
-    )
-    diar_embedding_model = diart_models.EmbeddingModel.from_pyannote(
-        "pyannote/embedding", use_hf_token=pyannote_token or True
-    )
-    print("Pyannote-modeller for diariseringspipeline lastet inn.")
-except Exception as pyannote_error:
-    diar_segmentation_model = None
-    diar_embedding_model = None
-    print(f"ADVARSEL: Kunne ikke laste pyannote-modeller: {pyannote_error}")
-    traceback.print_exc()
+# Pyannote-modeller lastes per sesjon inne i ReactiveDiarizationPipeline for å unngå
+# delt global tilstand mellom samtidige brukere.
 
 @app.route('/')
 def index():
@@ -246,10 +235,19 @@ class ReactiveDiarizationPipeline:
             "delta_new": 0.57,
             "sample_rate": sample_rate,
         }
-        if diar_segmentation_model is not None:
-            diar_config_kwargs["segmentation"] = diar_segmentation_model
-        if diar_embedding_model is not None:
-            diar_config_kwargs["embedding"] = diar_embedding_model
+        try:
+            seg_model = diart_models.SegmentationModel.from_pyannote(
+                "pyannote/segmentation", use_hf_token=pyannote_token or True
+            )
+            emb_model = diart_models.EmbeddingModel.from_pyannote(
+                "pyannote/embedding", use_hf_token=pyannote_token or True
+            )
+            diar_config_kwargs["segmentation"] = seg_model
+            diar_config_kwargs["embedding"] = emb_model
+            print("Pyannote-modeller lastet for ny klienttilkobling.")
+        except Exception as pyannote_err:
+            print(f"ADVARSEL: Kunne ikke laste pyannote-modeller for ny sesjon: {pyannote_err}")
+            traceback.print_exc()
         diar_config = SpeakerDiarizationConfig(**diar_config_kwargs)
         self.diarization = SpeakerDiarization(diar_config)
         self.audio_subject = Subject()
@@ -339,8 +337,6 @@ def stream(ws):
     print("Klient koblet til, starter vedvarende ffmpeg-prosess.")
     session_config = DEFAULT_CONFIG.copy()
     config_lock = threading.Lock()
-    loader_state_lock = threading.Lock()
-    model_loader_state = {"thread": None, "pending": None}
     ws_send_lock = threading.Lock()
 
     def safe_ws_send(payload):
@@ -351,50 +347,6 @@ def stream(ws):
             print(f"WebSocket lukket, dropper melding: {closed_err}")
         except Exception as send_error:
             print(f"Kunne ikke sende WS-melding: {send_error}")
-
-    def start_model_load(target_model_name):
-        def _load(name):
-            try:
-                model_manager.preload(name)
-            except Exception as load_error:
-                print(f"Kunne ikke laste modell {name}: {load_error}")
-                traceback.print_exc()
-                safe_ws_send({
-                    "type": "model_status",
-                    "status": "error",
-                    "modelName": name,
-                    "error": str(load_error)
-                })
-            else:
-                with config_lock:
-                    session_config['MODEL_NAME'] = name
-                print(f"Oppdaterer konfigurasjon: MODEL_NAME = {name}")
-                safe_ws_send({
-                    "type": "model_status",
-                    "status": "ready",
-                    "modelName": name
-                })
-            finally:
-                with loader_state_lock:
-                    next_name = model_loader_state["pending"]
-                    model_loader_state["pending"] = None
-                    model_loader_state["thread"] = None
-                if next_name and next_name != name:
-                    safe_ws_send({
-                        "type": "model_status",
-                        "status": "loading",
-                        "modelName": next_name
-                    })
-                    start_model_load(next_name)
-
-        with loader_state_lock:
-            existing_thread = model_loader_state["thread"]
-            if existing_thread and existing_thread.is_alive():
-                model_loader_state["pending"] = target_model_name
-                return
-            thread = threading.Thread(target=_load, args=(target_model_name,), daemon=True)
-            model_loader_state["thread"] = thread
-            thread.start()
 
     command = ['ffmpeg', '-loglevel', 'error', '-i', 'pipe:0', '-f', 's16le', '-ac', '1', '-ar', str(session_config['TARGET_SAMPLERATE']), 'pipe:1']
     ffmpeg_process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
@@ -420,21 +372,11 @@ def stream(ws):
                         key, value = data.get('key'), data.get('value')
                         if key == 'MODEL_NAME':
                             if value in SUPPORTED_MODELS:
-                                with config_lock:
-                                    current_model = session_config.get('MODEL_NAME')
-                                if current_model == value and model_manager.current_model_name() == value:
-                                    safe_ws_send({
-                                        "type": "model_status",
-                                        "status": "ready",
-                                        "modelName": value
-                                    })
-                                    continue
                                 safe_ws_send({
                                     "type": "model_status",
-                                    "status": "loading",
+                                    "status": "ready",
                                     "modelName": value
                                 })
-                                start_model_load(value)
                             else:
                                 print(f"Ignorerer ukjent modellvalg: {value}")
                         elif key in session_config:
