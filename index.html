@@ -47,33 +47,6 @@
             <div id="status" class="h-6 text-center text-gray-600 dark:text-gray-300 font-medium">Klar til å starte</div>
         </div>
 
-        <div class="mb-6">
-            <h2 class="text-lg font-semibold text-center mb-3">Modellvalg</h2>
-            <div id="modelSelector" class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                <label class="flex items-start space-x-3 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:border-blue-400">
-                    <input type="radio" name="modelSelection" value="NbAiLab/nb-whisper-large" class="mt-1 text-blue-600 focus:ring-blue-500" checked>
-                    <div>
-                        <div class="font-semibold text-gray-800 dark:text-gray-100">Sámi → Norsk</div>
-                        <div class="text-sm text-gray-500 dark:text-gray-400">nb-whisper-large</div>
-                    </div>
-                </label>
-                <label class="flex items-start space-x-3 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:border-blue-400">
-                    <input type="radio" name="modelSelection" value="NbAiLab/whisper-large-sme" class="mt-1 text-blue-600 focus:ring-blue-500">
-                    <div>
-                        <div class="font-semibold text-gray-800 dark:text-gray-100">Sámi → Sámi</div>
-                        <div class="text-sm text-gray-500 dark:text-gray-400">whisper-large-sme</div>
-                    </div>
-                </label>
-                <label class="flex items-start space-x-3 border border-gray-200 dark:border-gray-700 rounded-xl p-4 cursor-pointer hover:border-blue-400">
-                    <input type="radio" name="modelSelection" value="GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned" class="mt-1 text-blue-600 focus:ring-blue-500">
-                    <div>
-                        <div class="font-semibold text-gray-800 dark:text-gray-100">Sámi (CTC)</div>
-                        <div class="text-sm text-gray-500 dark:text-gray-400">wav2vec2-large-sami</div>
-                    </div>
-                </label>
-            </div>
-        </div>
-
         <div class="mb-4 flex justify-center">
             <div class="inline-flex rounded-md shadow-sm" role="group">
                 <button type="button" id="showNorwegianBtn" class="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-gray-200 rounded-l-lg hover:bg-blue-700 dark:bg-blue-500 dark:border-gray-600 dark:text-white dark:hover:bg-blue-600">Norsk</button>
@@ -147,91 +120,17 @@
         const maxSecondsValue = document.getElementById('maxSecondsValue');
         const silenceDurationValue = document.getElementById('silenceDurationValue');
         const vadThresholdValue = document.getElementById('vadThresholdValue');
-        const modelRadios = document.querySelectorAll('input[name="modelSelection"]');
-
         let isRecording = false;
         let mediaRecorder;
         let socket;
         const CHUNK_TIMESLICE_MS = 500;
         const TARTUNLP_API_URL = 'https://api.tartunlp.ai/translation/v2';
-        const DEFAULT_MODEL = 'NbAiLab/nb-whisper-large';
-        const MODEL_OPTIONS = {
-            'NbAiLab/nb-whisper-large': {
-                label: 'Sámi → Norsk',
-                sourceLang: 'nor',
-                transcriptionLabel: 'Norsk',
-                defaultTarget: 'sme'
-            },
-            'NbAiLab/whisper-large-sme': {
-                label: 'Sámi → Sámi',
-                sourceLang: 'sme',
-                transcriptionLabel: 'Nordsamisk',
-                defaultTarget: 'nor'
-            },
-            'GetmanY1/wav2vec2-large-sami-cont-pt-22k-finetuned': {
-                label: 'Sámi (CTC)',
-                sourceLang: 'sme',
-                transcriptionLabel: 'Nordsamisk (CTC)',
-                defaultTarget: 'nor'
-            }
-        };
-        let selectedModel = DEFAULT_MODEL;
-
-        let isModelLoading = false;
+        const SOURCE_LANG = 'sme';
         let lastStatusMessage = statusDiv.textContent || 'Klar til å starte';
-
-        function getModelLabel(modelName) {
-            return MODEL_OPTIONS[modelName]?.label || modelName;
-        }
-
-        function resolveSourceLanguage(modelName) {
-            const entry = MODEL_OPTIONS[modelName];
-            if (entry && entry.sourceLang) {
-                return normalizeLanguageCode(entry.sourceLang);
-            }
-            if (typeof modelName === 'string' && modelName.toLowerCase().includes('whisper-large-sme')) {
-                return 'sme';
-            }
-            return 'nor';
-        }
 
         function setStatusMessage(message) {
             lastStatusMessage = message;
-            if (!isModelLoading) {
-                statusDiv.textContent = message;
-            }
-        }
-
-        function setModelLoadingState(isLoading, modelName) {
-            if (isLoading) {
-                isModelLoading = true;
-                statusDiv.textContent = `Laster modell (${getModelLabel(modelName)})...`;
-            } else {
-                isModelLoading = false;
-                statusDiv.textContent = lastStatusMessage;
-            }
-        }
-
-        function handleModelStatusMessage(payload) {
-            const { status, modelName, error } = payload;
-            if (status === 'loading') {
-                setModelLoadingState(true, modelName);
-                return;
-            }
-            if (status === 'ready') {
-                setModelLoadingState(false, modelName);
-                if (isRecording) {
-                    setStatusMessage('Strømmer lyd...');
-                } else {
-                    setStatusMessage('Klar til å starte');
-                }
-                return;
-            }
-            if (status === 'error') {
-                setModelLoadingState(false, modelName);
-                const errorText = error ? `Feil ved lasting av modell: ${error}` : 'Feil ved lasting av modell.';
-                setStatusMessage(errorText);
-            }
+            statusDiv.textContent = message;
         }
 
         function normalizeLanguageCode(code) {
@@ -292,8 +191,8 @@
                 targetLanguageSelect.appendChild(option);
             });
 
-            if (supportedLanguages.sme) {
-                targetLanguageSelect.value = 'sme';
+            if (supportedLanguages.nor) {
+                targetLanguageSelect.value = 'nor';
             } else if (sortedEntries.length > 0) {
                 targetLanguageSelect.value = sortedEntries[0][0];
             }
@@ -312,16 +211,10 @@
             updateTranslationHeader();
         }
 
-        function applyModelUI(modelName) {
-            const modelSettings = MODEL_OPTIONS[modelName] || {};
-            const transLabel = modelSettings.transcriptionLabel || 'Norsk';
-            transcriptionHeader.textContent = transLabel;
-            showNorwegianBtn.textContent = transLabel;
-            if (modelSettings.defaultTarget) {
-                selectTargetLanguage(modelSettings.defaultTarget);
-            } else {
-                updateTranslationHeader();
-            }
+        function applyModelUI() {
+            transcriptionHeader.textContent = 'Nordsamisk (CTC)';
+            showNorwegianBtn.textContent = 'Nordsamisk (CTC)';
+            selectTargetLanguage('nor');
         }
 
         // Update translation header based on selected language
@@ -334,9 +227,8 @@
         targetLanguageSelect.addEventListener('change', updateTranslationHeader);
 
         // TartuNLP Translation API v2 function
-        async function translateText(text, targetLang, modelNameOverride) {
-            const resolvedModel = modelNameOverride || selectedModel;
-            const sourceLang = resolveSourceLanguage(resolvedModel);
+        async function translateText(text, targetLang) {
+            const sourceLang = SOURCE_LANG;
             const normalizedTarget = normalizeLanguageCode(targetLang) || 'nor';
 
             if (normalizedTarget === sourceLang) {
@@ -400,22 +292,6 @@
             activeBtn.classList.remove('bg-white', 'dark:bg-gray-700', 'text-gray-900', 'dark:text-white');
         }
 
-        modelRadios.forEach((radio) => {
-            if (radio.checked) {
-                selectedModel = radio.value;
-            }
-            radio.addEventListener('change', (event) => {
-                if (!event.target.checked) return;
-                selectedModel = event.target.value;
-                applyModelUI(selectedModel);
-                if (socket && socket.readyState === WebSocket.OPEN) {
-                    sendConfig('MODEL_NAME', selectedModel);
-                } else {
-                    preloadModel(selectedModel);
-                }
-            });
-        });
-
         showNorwegianBtn.addEventListener('click', () => {
             outputContainer.classList.remove('md:grid-cols-2'); outputContainer.classList.add('md:grid-cols-1');
             norwegianContainerDiv.classList.remove('hidden'); translationContainerDiv.classList.add('hidden');
@@ -460,7 +336,6 @@
             socket.onopen = async () => {
                 setStatusMessage('Tilkoblet. Starter mikrofon...');
                 try {
-                    sendConfig('MODEL_NAME', selectedModel);
                     sendConfig('MAX_BUFFER_SECONDS', parseFloat(maxSecondsSlider.value));
                     sendConfig('SILENCE_DURATION_S', parseFloat(silenceDurationSlider.value));
                     sendConfig('VAD_THRESHOLD', parseFloat(vadThresholdSlider.value));
@@ -480,11 +355,6 @@
 
             socket.onmessage = async (event) => {
                 const data = JSON.parse(event.data);
-                if (data.type === 'model_status') {
-                    handleModelStatusMessage(data);
-                    return;
-                }
-                
                 if (data.type === 'transcription') {
                     // Add Norwegian transcription
                     const norwegianP = document.createElement('p');
@@ -502,7 +372,7 @@
 
                     // Translate using TartuNLP API
                     const targetLang = targetLanguageSelect.value;
-                    const translation = await translateText(data.text, targetLang, data.modelName);
+                    const translation = await translateText(data.text, targetLang);
                     
                     // Update translation
                     translationP.textContent = translation;
@@ -557,29 +427,9 @@
         updateActiveButton(showNorwegianBtn);
         showNorwegianBtn.click();
         
-        async function preloadModel(modelName) {
-            try {
-                setModelLoadingState(true, modelName);
-                const response = await fetch('/preload-model', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ modelName })
-                });
-                const data = await response.json();
-                if (!response.ok) {
-                    throw new Error(data.error || 'Klarte ikke å laste modell.');
-                }
-                setModelLoadingState(false, modelName);
-            } catch (error) {
-                console.error('Preload error:', error);
-                setStatusMessage(error.message || 'Klarte ikke å laste modell.');
-                setModelLoadingState(false, modelName);
-            }
-        }
-
         // Load supported languages on page load
         loadSupportedLanguages();
-        applyModelUI(selectedModel);
+        applyModelUI();
     </script>
 </body>
 </html>
